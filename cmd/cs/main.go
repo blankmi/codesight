@@ -1,0 +1,333 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	pkg "github.com/blankbytes/codesight/pkg"
+	"github.com/blankbytes/codesight/pkg/embedding"
+	"github.com/blankbytes/codesight/pkg/splitter"
+	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"github.com/spf13/cobra"
+)
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+var rootCmd = &cobra.Command{
+	Use:   "cs",
+	Short: "codesight — semantic code search",
+}
+
+var indexCmd = &cobra.Command{
+	Use:   "index [path]",
+	Short: "Index a codebase for semantic search",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runIndex,
+}
+
+var searchCmd = &cobra.Command{
+	Use:   "search <query>",
+	Short: "Search indexed codebase",
+	Args:  cobra.MinimumNArgs(1),
+	RunE:  runSearch,
+}
+
+var statusCmd = &cobra.Command{
+	Use:   "status [path]",
+	Short: "Show index status for a codebase",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runStatus,
+}
+
+var clearCmd = &cobra.Command{
+	Use:   "clear [path]",
+	Short: "Remove index for a codebase",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runClear,
+}
+
+var (
+	flagForce   bool
+	flagBranch  string
+	flagCommit  string
+	flagLimit   int
+	flagExt     string
+	flagPath    string
+	flagVerbose bool
+)
+
+func init() {
+	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable debug logging")
+
+	indexCmd.Flags().BoolVar(&flagForce, "force", false, "re-index even if already indexed")
+	indexCmd.Flags().StringVar(&flagBranch, "branch", "", "branch name for metadata")
+	indexCmd.Flags().StringVar(&flagCommit, "commit", "", "commit SHA to record")
+
+	searchCmd.Flags().StringVar(&flagPath, "path", ".", "codebase path")
+	searchCmd.Flags().IntVar(&flagLimit, "limit", 10, "max results")
+	searchCmd.Flags().StringVar(&flagExt, "ext", "", "filter by file extensions (comma-separated, e.g. .go,.ts)")
+
+	rootCmd.AddCommand(indexCmd)
+	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(clearCmd)
+}
+
+func newLogger() *slog.Logger {
+	level := slog.LevelInfo
+	if flagVerbose {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}
+
+func newStore() (vectorstore.Store, error) {
+	dbType := envOrDefault("CODESIGHT_DB_TYPE", "milvus")
+	switch dbType {
+	case "milvus":
+		address := envOrDefault("CODESIGHT_DB_ADDRESS", "localhost:19530")
+		token := os.Getenv("CODESIGHT_DB_TOKEN")
+		return vectorstore.NewMilvusStore(address, token), nil
+	default:
+		return nil, fmt.Errorf("unsupported db type: %s", dbType)
+	}
+}
+
+func newEmbedder() embedding.Provider {
+	host := envOrDefault("CODESIGHT_OLLAMA_HOST", "http://127.0.0.1:11434")
+	model := envOrDefault("CODESIGHT_EMBEDDING_MODEL", "nomic-embed-text")
+	return embedding.NewOllamaClient(host, model, "")
+}
+
+func envOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+func resolveProjectPath(path string) (string, error) {
+	return filepath.Abs(path)
+}
+
+func detectGitCommit(path string) (string, error) {
+	absPath, err := resolveProjectPath(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving path: %w", err)
+	}
+	out, err := exec.Command("git", "-C", absPath, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("detecting git commit: %w", err)
+	}
+	commit := strings.TrimSpace(string(out))
+	if commit == "" {
+		return "", fmt.Errorf("detecting git commit: empty result")
+	}
+	return commit, nil
+}
+
+func runIndex(cmd *cobra.Command, args []string) error {
+	path := "."
+	if len(args) > 0 {
+		path = args[0]
+	}
+
+	logger := newLogger()
+	commit := strings.TrimSpace(flagCommit)
+	if commit == "" {
+		detectedCommit, err := detectGitCommit(path)
+		if err != nil {
+			logger.Debug("unable to auto-detect git commit; proceeding without commit metadata", "path", path, "error", err)
+		} else {
+			commit = detectedCommit
+			logger.Debug("auto-detected git commit", "commit", commit)
+		}
+	}
+
+	store, err := newStore()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	if err := store.Connect(ctx); err != nil {
+		return fmt.Errorf("connecting to vector store: %w", err)
+	}
+	defer store.Close()
+
+	embedder := newEmbedder()
+
+	// Auto-detect the model's context length and derive chunk limits.
+	var splitterOpts []splitter.Option
+	if oc, ok := embedder.(*embedding.OllamaClient); ok {
+		if contextTokens, err := oc.DetectContextLength(ctx); err != nil {
+			logger.Warn("unable to detect model context length, using default", "error", err)
+		} else {
+			logger.Debug("detected model context length", "tokens", contextTokens, "max_input_chars", oc.MaxInputChars())
+			splitterOpts = append(splitterOpts, splitter.WithMaxChunkChars(oc.MaxInputChars()))
+		}
+	}
+
+	idx := &pkg.Indexer{
+		Store:    store,
+		Embedder: embedder,
+		Splitter: splitter.NewTreeSitterSplitter(splitterOpts...),
+		Logger:   logger,
+	}
+
+	return idx.Index(ctx, pkg.IndexOptions{
+		Path:      path,
+		Branch:    flagBranch,
+		CommitSHA: commit,
+		Force:     flagForce,
+	})
+}
+
+func runSearch(cmd *cobra.Command, args []string) error {
+	query := strings.Join(args, " ")
+	logger := newLogger()
+
+	store, err := newStore()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	if err := store.Connect(ctx); err != nil {
+		return fmt.Errorf("connecting to vector store: %w", err)
+	}
+	defer store.Close()
+
+	var extensions []string
+	if flagExt != "" {
+		for _, ext := range strings.Split(flagExt, ",") {
+			ext = strings.TrimSpace(ext)
+			if ext != "" {
+				if !strings.HasPrefix(ext, ".") {
+					ext = "." + ext
+				}
+				extensions = append(extensions, ext)
+			}
+		}
+	}
+
+	searcher := &pkg.Searcher{
+		Store:    store,
+		Embedder: newEmbedder(),
+		Logger:   logger,
+	}
+
+	output, err := searcher.Search(ctx, pkg.SearchOptions{
+		Path:       flagPath,
+		Query:      query,
+		Limit:      flagLimit,
+		Extensions: extensions,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Print(pkg.FormatResults(output))
+	return nil
+}
+
+func runStatus(cmd *cobra.Command, args []string) error {
+	path := "."
+	if len(args) > 0 {
+		path = args[0]
+	}
+
+	store, err := newStore()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	if err := store.Connect(ctx); err != nil {
+		return fmt.Errorf("connecting to vector store: %w", err)
+	}
+	defer store.Close()
+
+	absPath, err := resolveProjectPath(path)
+	if err != nil {
+		return fmt.Errorf("resolving path: %w", err)
+	}
+
+	collection := pkg.CollectionName(absPath)
+	exists, err := store.CollectionExists(ctx, collection)
+	if err != nil {
+		return fmt.Errorf("checking collection: %w", err)
+	}
+	if !exists {
+		fmt.Println("Status: not indexed")
+		return nil
+	}
+
+	meta, err := store.GetMetadata(ctx, collection)
+	if err != nil {
+		return fmt.Errorf("reading metadata: %w", err)
+	}
+
+	if meta == nil {
+		fmt.Println("Status: indexed (no metadata)")
+		return nil
+	}
+
+	fmt.Printf("Collection: %s\n", collection)
+	fmt.Printf("Branch:     %s\n", meta.Branch)
+	fmt.Printf("Commit:     %s\n", meta.CommitSHA)
+	fmt.Printf("Indexed:    %s\n", meta.IndexedAt.UTC().Format("2006-01-02 15:04:05 UTC"))
+	fmt.Printf("Files:      %d\n", meta.FileCount)
+	fmt.Printf("Chunks:     %d\n", meta.ChunkCount)
+
+	return nil
+}
+
+func runClear(cmd *cobra.Command, args []string) error {
+	path := "."
+	if len(args) > 0 {
+		path = args[0]
+	}
+
+	store, err := newStore()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	if err := store.Connect(ctx); err != nil {
+		return fmt.Errorf("connecting to vector store: %w", err)
+	}
+	defer store.Close()
+
+	absPath, err := resolveProjectPath(path)
+	if err != nil {
+		return fmt.Errorf("resolving path: %w", err)
+	}
+
+	collection := pkg.CollectionName(absPath)
+	exists, err := store.CollectionExists(ctx, collection)
+	if err != nil {
+		return fmt.Errorf("checking collection: %w", err)
+	}
+	if !exists {
+		fmt.Println("No index found.")
+		return nil
+	}
+
+	if err := store.DropCollection(ctx, collection); err != nil {
+		return fmt.Errorf("dropping collection: %w", err)
+	}
+
+	fmt.Printf("Cleared index for %s\n", absPath)
+	return nil
+}

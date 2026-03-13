@@ -1,0 +1,29 @@
+# Binaries and build artifacts
+/bin/
+
+# Go dependencies
+/vendor/
+
+# Go test and coverage
+*.test
+*.out
+coverage.out
+*.coverprofile
+
+# IDE configuration
+.idea/
+.vscode/
+
+# OS-specific
+.DS_Store
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Milvus data (if running locally)
+milvus_data/
