@@ -1,6 +1,6 @@
 ---
 name: cs
-description: Use the Codesight `cs` CLI to index and semantically search code in any repository. Trigger when tasks require fast code discovery, natural-language code search, narrowing results by extension, checking index freshness, or reducing exploratory grep/glob scans.
+description: Use the Codesight `cs` CLI to index and semantically search code in any repository. Trigger when tasks require fast code discovery, natural-language code search, narrowing results by extension, checking index freshness, or reducing exploratory grep/glob scans. In sandboxed Codex sessions, run `cs` with escalated permissions because it needs network access to the CodeSight DB.
 ---
 
 # Cs
@@ -8,6 +8,8 @@ description: Use the Codesight `cs` CLI to index and semantically search code in
 ## Overview
 
 Use `cs` as the primary discovery tool for large codebases. Index once, search iteratively, and return precise file/line references.
+
+In sandboxed Codex environments, `cs` commands require network access. Run them with `sandbox_permissions: "require_escalated"`.
 
 ## Workflow
 
@@ -33,6 +35,17 @@ Use `cs` as the primary discovery tool for large codebases. Index once, search i
 - Open the top result files and confirm behavior.
 - Return concise references with file and line ranges.
 
+## Codex Execution Rule
+
+When invoking `cs` through tool calls in sandboxed Codex sessions, set:
+- `sandbox_permissions: "require_escalated"`
+- `justification`: ask to allow network access for CodeSight DB queries
+
+After first approval, request persistent prefix rules to avoid repeated prompts:
+- `["cs", "search"]`
+- `["cs", "status"]`
+- Optional: `["cs", "index"]`, `["cs", "clear"]`
+
 ## Command Patterns
 
 - Check status: `cs status <path>`
@@ -47,3 +60,4 @@ Use `cs` as the primary discovery tool for large codebases. Index once, search i
 - Prefer `cs search` as the first-pass discovery tool; use grep-style search for exact tokens only after semantic narrowing.
 - Re-index when repository HEAD changes significantly or when stale status is reported.
 - If `cs search` returns no useful hits, retry with alternate wording before falling back to manual tree-wide scans.
+- If `cs` appears to hang in Codex, rerun the command with escalated permissions; this usually indicates blocked network access.

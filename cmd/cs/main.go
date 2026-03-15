@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	pkg "github.com/blankbytes/codesight/pkg"
 	"github.com/blankbytes/codesight/pkg/embedding"
@@ -15,6 +18,8 @@ import (
 	"github.com/blankbytes/codesight/pkg/vectorstore"
 	"github.com/spf13/cobra"
 )
+
+const interactiveNetworkTimeout = 1 * time.Second
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -108,6 +113,38 @@ func newEmbedder() embedding.Provider {
 	return embedding.NewOllamaClient(host, model, "")
 }
 
+func runWithTimeout(timeout time.Duration, action string, fn func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if err := fn(ctx); err != nil {
+		return wrapTimeoutError(action, timeout, err)
+	}
+	return nil
+}
+
+func wrapTimeoutError(action string, timeout time.Duration, err error) error {
+	if !isTimeoutError(err) {
+		return err
+	}
+
+	return fmt.Errorf(
+		"%s timed out after %s; network access may be blocked in this sandbox or the configured service may be unreachable: %w",
+		action,
+		timeout,
+		err,
+	)
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
 func envOrDefault(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -158,22 +195,30 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
-	if err := store.Connect(ctx); err != nil {
+	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
+		return store.Connect(ctx)
+	}); err != nil {
 		return fmt.Errorf("connecting to vector store: %w", err)
 	}
 	defer store.Close()
+
+	ctx := context.Background()
 
 	embedder := newEmbedder()
 
 	// Auto-detect the model's context length and derive chunk limits.
 	var splitterOpts []splitter.Option
 	if oc, ok := embedder.(*embedding.OllamaClient); ok {
-		if contextTokens, err := oc.DetectContextLength(ctx); err != nil {
-			logger.Warn("unable to detect model context length, using default", "error", err)
-		} else {
+		if err := runWithTimeout(interactiveNetworkTimeout, "detecting model context length", func(ctx context.Context) error {
+			contextTokens, err := oc.DetectContextLength(ctx)
+			if err != nil {
+				return err
+			}
 			logger.Debug("detected model context length", "tokens", contextTokens, "max_input_chars", oc.MaxInputChars())
 			splitterOpts = append(splitterOpts, splitter.WithMaxChunkChars(oc.MaxInputChars()))
+			return nil
+		}); err != nil {
+			logger.Warn("unable to detect model context length, using default", "error", err)
 		}
 	}
 
@@ -201,8 +246,9 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
-	if err := store.Connect(ctx); err != nil {
+	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
+		return store.Connect(ctx)
+	}); err != nil {
 		return fmt.Errorf("connecting to vector store: %w", err)
 	}
 	defer store.Close()
@@ -226,13 +272,17 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		Logger:   logger,
 	}
 
-	output, err := searcher.Search(ctx, pkg.SearchOptions{
-		Path:       flagPath,
-		Query:      query,
-		Limit:      flagLimit,
-		Extensions: extensions,
-	})
-	if err != nil {
+	var output *pkg.SearchOutput
+	if err := runWithTimeout(interactiveNetworkTimeout, "running search", func(ctx context.Context) error {
+		var err error
+		output, err = searcher.Search(ctx, pkg.SearchOptions{
+			Path:       flagPath,
+			Query:      query,
+			Limit:      flagLimit,
+			Extensions: extensions,
+		})
+		return err
+	}); err != nil {
 		return err
 	}
 
@@ -251,8 +301,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
-	if err := store.Connect(ctx); err != nil {
+	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
+		return store.Connect(ctx)
+	}); err != nil {
 		return fmt.Errorf("connecting to vector store: %w", err)
 	}
 	defer store.Close()
@@ -263,8 +314,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	collection := pkg.CollectionName(absPath)
-	exists, err := store.CollectionExists(ctx, collection)
-	if err != nil {
+	var exists bool
+	if err := runWithTimeout(interactiveNetworkTimeout, "checking index status", func(ctx context.Context) error {
+		var err error
+		exists, err = store.CollectionExists(ctx, collection)
+		return err
+	}); err != nil {
 		return fmt.Errorf("checking collection: %w", err)
 	}
 	if !exists {
@@ -272,8 +327,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	meta, err := store.GetMetadata(ctx, collection)
-	if err != nil {
+	var meta *vectorstore.IndexMetadata
+	if err := runWithTimeout(interactiveNetworkTimeout, "reading index metadata", func(ctx context.Context) error {
+		var err error
+		meta, err = store.GetMetadata(ctx, collection)
+		return err
+	}); err != nil {
 		return fmt.Errorf("reading metadata: %w", err)
 	}
 
@@ -303,8 +362,9 @@ func runClear(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
-	if err := store.Connect(ctx); err != nil {
+	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
+		return store.Connect(ctx)
+	}); err != nil {
 		return fmt.Errorf("connecting to vector store: %w", err)
 	}
 	defer store.Close()
@@ -315,8 +375,12 @@ func runClear(cmd *cobra.Command, args []string) error {
 	}
 
 	collection := pkg.CollectionName(absPath)
-	exists, err := store.CollectionExists(ctx, collection)
-	if err != nil {
+	var exists bool
+	if err := runWithTimeout(interactiveNetworkTimeout, "checking whether an index exists", func(ctx context.Context) error {
+		var err error
+		exists, err = store.CollectionExists(ctx, collection)
+		return err
+	}); err != nil {
 		return fmt.Errorf("checking collection: %w", err)
 	}
 	if !exists {
@@ -324,7 +388,9 @@ func runClear(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := store.DropCollection(ctx, collection); err != nil {
+	if err := runWithTimeout(interactiveNetworkTimeout, "clearing the index", func(ctx context.Context) error {
+		return store.DropCollection(ctx, collection)
+	}); err != nil {
 		return fmt.Errorf("dropping collection: %w", err)
 	}
 

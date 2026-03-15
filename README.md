@@ -156,9 +156,13 @@ Pre-built skill files for popular coding agents are in `agent-skills/`:
 > [!IMPORTANT]
 > These skills require project-specific setup (indexing the source code). They should be installed per-project rather than globally to ensure the agent uses the correct index for the current codebase.
 
-### Ensuring agents actually use `cs search`
+### Making agents use `cs search` reliably
 
-Installing the skill alone is not enough — agents will default to built-in tools (grep, glob, file reads) unless explicitly instructed otherwise. To make an agent reliably use `cs search`, add the following instruction to the agent's **project-level** config file:
+Installing the skill alone is not enough — agents will default to built-in tools (grep, glob, file reads) unless you either:
+1. add an explicit instruction to the agent's config, or
+2. directly tell the agent in your prompt to use `cs search`.
+
+To make an agent reliably use `cs search`, add the following instruction to the agent's **project-level** config file:
 
 | Agent       | Config file                          |
 |-------------|--------------------------------------|
@@ -167,15 +171,25 @@ Installing the skill alone is not enough — agents will default to built-in too
 | Codex       | `AGENTS.md` or `AGENTS.override.md`  |
 
 ```markdown
-When searching for code by functionality or meaning, ALWAYS use the `cs` skill with `cs search` instead of grep or find.
-Only fall back to grep/find when searching for exact string matches or file name patterns.
+Use `cs search "<query>"` for semantic code search.
+When a request is about behavior, purpose, or functionality rather than an exact string or file name, start with `cs search "<query>"` instead of grep, glob, or broad file reads.
+Use grep/find for exact text, file/path discovery, comments, TODOs, log messages, or config keys.
+Read full files only after `cs search` has identified relevant locations, or when editing or verifying surrounding context.
 ```
-
 > [!IMPORTANT]
-> Add this instruction to the **project-level** config file only — not the global one. Since `cs` requires a per-project index, adding it globally would cause agents to invoke `cs search` in projects that haven't been indexed, leading to errors.
+> Add this instruction to the **project-level** config file if you want it to apply automatically. `cs` depends on a per-project index, so enabling it globally would make agents try to use `cs search` in unrelated projects that have not been indexed.
 
 > [!NOTE]
 > Skills and referenced files are passive — agents may not follow them reliably. Instructions placed directly in the agent's config file are loaded into the agent's context automatically and have the strongest influence on tool selection behavior.
+
+#### Quick verification
+
+Ask the agent something like:
+- `Where is authentication handled?`
+- `Find the code that creates the database connection pool.`
+- `Search for JWT validation logic.`
+
+A correct run should start with `cs search`. If the agent starts with `grep`, `glob`, or broad file reads for these semantic queries, the config instruction is either missing or too weak.
 
 ### Allowlisting `cs` for autonomous use
 

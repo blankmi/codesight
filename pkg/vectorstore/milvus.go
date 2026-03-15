@@ -57,6 +57,13 @@ func (m *MilvusStore) Connect(ctx context.Context) error {
 		return fmt.Errorf("milvus connect: %w", err)
 	}
 	m.client = c
+
+	// Verify connectivity. client.NewClient might not perform a network dial.
+	// HasCollection is a simple way to verify we can talk to the server.
+	if _, err := m.client.HasCollection(ctx, "health_check"); err != nil {
+		return fmt.Errorf("milvus connectivity check: %w", err)
+	}
+
 	return nil
 }
 
