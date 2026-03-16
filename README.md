@@ -191,6 +191,28 @@ Ask the agent something like:
 
 A correct run should start with `cs search`. If the agent starts with `grep`, `glob`, or broad file reads for these semantic queries, the config instruction is either missing or too weak.
 
+### Use `codesight` together with `symgrep`
+
+For maximum token efficiency, combine `cs search` for semantic discovery with [symgrep](https://github.com/blankmi/symgrep) for surgical symbol extraction.
+
+Include this **Master Search Strategy** in your agent's project-level configuration (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`, etc.):
+
+```markdown
+# Master Search Strategy
+1. **Semantic Discovery:** For any inquiry about behavior or logic ("How...", "Where is..."), **ALWAYS** start with `cs search "<query>"`.
+2. **Symbol Mapping:** Once a relevant file is found, use `symgrep list -f <path>` to identify relevant functions, classes, or methods.
+3. **Surgical Extraction:** Use `symgrep extract -f <path> -s <symbol>` to retrieve code. Avoid `read_file` for structural elements.
+4. **Lexical Fallback:** Use `grep` only for exact strings (logs, constants, TODOs) or if semantic search is unsuccessful.
+
+# Search Guardrails
+- **NEVER** start with `grep` for "How", "Where", or "Why". Use `cs search`.
+- **NEVER** use `read_file` for structural elements if `symgrep` is available.
+- **NEVER** assume `grep` is more efficient than `cs` for codebase mapping.
+
+# The Golden Path
+`cs search` (locate file) → `symgrep list` (locate symbol) → `symgrep extract` (read code)
+```
+
 ### Allowlisting `cs` for autonomous use
 
 By default, coding agents require user approval before running shell commands. To let an agent use `cs` without prompting each time, add it to the agent's permission allowlist.
