@@ -221,6 +221,12 @@ prefix_rule(
 
 See the [Codex rules docs](https://developers.openai.com/codex/rules) for rule syntax and scope details.
 
+> [!IMPORTANT]
+> **Network Escalation:** Codex restricts outbound network access by default. Since `cs` needs to talk to Milvus and Ollama, it will initially fail with a timeout error:
+> `connecting to the vector store timed out after 1s; network access may be blocked in this sandbox...`
+>
+> This error is specifically designed to be recognized by the agent, which will then request a **network escalation**. Once you approve the escalation, the agent will have the necessary access to perform searches. See the [Codex security docs](https://developers.openai.com/codex/agent-approvals-security/#network-access) for more details.
+
 **Gemini CLI** — add to `.gemini/policies/cs.toml` (project-level) or `~/.gemini/policies/cs.toml` (global):
 
 ```toml
