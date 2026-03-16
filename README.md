@@ -113,6 +113,9 @@ All configuration is via environment variables:
 | `CODESIGHT_EMBEDDING_PROVIDER` | Embedding provider   | `ollama`                 |
 | `CODESIGHT_EMBEDDING_MODEL`    | Embedding model name | `nomic-embed-text`       |
 | `CODESIGHT_OLLAMA_HOST`        | Ollama endpoint      | `http://127.0.0.1:11434` |
+| `CODESIGHT_OLLAMA_MAX_INPUT_CHARS` | Optional cap for Ollama embed input chars (must be positive int) | (auto-detected/default) |
+
+`cs index` auto-detects Ollama model context length when available, uses a conservative character budget, and adaptively retries with smaller limits on context-length overflow errors. `CODESIGHT_OLLAMA_MAX_INPUT_CHARS` can only lower that effective limit as a safety cap.
 
 ## Architecture
 

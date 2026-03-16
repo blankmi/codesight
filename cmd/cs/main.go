@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const interactiveNetworkTimeout = 1 * time.Second
+const (
+	interactiveNetworkTimeout = 1 * time.Second
+	ollamaMaxInputCharsEnv    = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
+)
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -152,6 +156,32 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+func parseOllamaMaxInputCharsOverride() (int, error) {
+	raw := strings.TrimSpace(os.Getenv(ollamaMaxInputCharsEnv))
+	if raw == "" {
+		return 0, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", ollamaMaxInputCharsEnv, raw)
+	}
+	return n, nil
+}
+
+func capMaxInputChars(base, cap int) int {
+	if base <= 0 {
+		return cap
+	}
+	if cap <= 0 {
+		return base
+	}
+	if cap < base {
+		return cap
+	}
+	return base
+}
+
 func resolveProjectPath(path string) (string, error) {
 	return filepath.Abs(path)
 }
@@ -190,6 +220,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	overrideMaxInputChars, err := parseOllamaMaxInputCharsOverride()
+	if err != nil {
+		return err
+	}
+
 	store, err := newStore()
 	if err != nil {
 		return err
@@ -215,11 +250,19 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			logger.Debug("detected model context length", "tokens", contextTokens, "max_input_chars", oc.MaxInputChars())
-			splitterOpts = append(splitterOpts, splitter.WithMaxChunkChars(oc.MaxInputChars()))
 			return nil
 		}); err != nil {
 			logger.Warn("unable to detect model context length, using default", "error", err)
 		}
+
+		effectiveMaxInputChars := capMaxInputChars(oc.MaxInputChars(), overrideMaxInputChars)
+		oc.SetMaxInputChars(effectiveMaxInputChars)
+		logger.Debug(
+			"using ollama max input chars",
+			"max_input_chars", effectiveMaxInputChars,
+			"override_max_input_chars", overrideMaxInputChars,
+		)
+		splitterOpts = append(splitterOpts, splitter.WithMaxChunkChars(effectiveMaxInputChars))
 	}
 
 	idx := &pkg.Indexer{

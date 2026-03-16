@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,9 +58,15 @@ func (o *OllamaClient) Embed(ctx context.Context, text string) ([]float32, error
 	return results[0], nil
 }
 
-// defaultMaxInputChars is the fallback character limit when context length
-// detection is not available. 8192 tokens * 2 chars/token = 16384, rounded down.
-const defaultMaxInputChars = 16000
+const (
+	// defaultMaxInputChars is the fallback character limit when context length
+	// detection is not available.
+	defaultMaxInputChars = 16000
+	// minAdaptiveMaxInputChars is the smallest limit adaptive retries will use.
+	minAdaptiveMaxInputChars = 512
+	// maxAdaptiveEmbedAttempts bounds retries after context overflow responses.
+	maxAdaptiveEmbedAttempts = 5
+)
 
 // MaxInputChars returns the detected character limit or the default (16000).
 func (o *OllamaClient) MaxInputChars() int {
@@ -71,9 +78,20 @@ func (o *OllamaClient) MaxInputChars() int {
 	return defaultMaxInputChars
 }
 
+// SetMaxInputChars updates the maximum character limit used for embedding
+// requests. Non-positive values are ignored.
+func (o *OllamaClient) SetMaxInputChars(n int) {
+	if n <= 0 {
+		return
+	}
+	o.mu.Lock()
+	o.maxInputChars = n
+	o.mu.Unlock()
+}
+
 // DetectContextLength queries Ollama's /api/show endpoint to discover the
 // model's actual context length, then derives a safe character limit from it.
-// The character limit uses a conservative 2 chars/token ratio.
+// The character limit uses a conservative 1 char/token ratio.
 func (o *OllamaClient) DetectContextLength(ctx context.Context) (int, error) {
 	reqBody, err := json.Marshal(map[string]string{"name": o.model})
 	if err != nil {
@@ -111,10 +129,8 @@ func (o *OllamaClient) DetectContextLength(ctx context.Context) (int, error) {
 			switch v := val.(type) {
 			case float64:
 				contextTokens := int(v)
-				charLimit := contextTokens * 2
-				o.mu.Lock()
-				o.maxInputChars = charLimit
-				o.mu.Unlock()
+				charLimit := contextTokens
+				o.SetMaxInputChars(charLimit)
 				return contextTokens, nil
 			}
 		}
@@ -128,47 +144,69 @@ func (o *OllamaClient) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 		return nil, nil
 	}
 
-	// Split oversized texts into sub-chunks at line boundaries and track
-	// which sub-chunks map back to which original text index.
-	var flatTexts []string
-	type span struct{ start, count int }
-	mapping := make([]span, len(texts))
-
 	maxChars := o.MaxInputChars()
-	for i, t := range texts {
-		if len(t) <= maxChars {
-			mapping[i] = span{start: len(flatTexts), count: 1}
-			flatTexts = append(flatTexts, t)
-		} else {
-			parts := splitTextAtLines(t, maxChars)
-			mapping[i] = span{start: len(flatTexts), count: len(parts)}
-			flatTexts = append(flatTexts, parts...)
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAdaptiveEmbedAttempts; attempt++ {
+		// Split oversized texts into sub-chunks at line boundaries and track
+		// which sub-chunks map back to which original text index.
+		var flatTexts []string
+		type span struct{ start, count int }
+		mapping := make([]span, len(texts))
+
+		for i, t := range texts {
+			if len(t) <= maxChars {
+				mapping[i] = span{start: len(flatTexts), count: 1}
+				flatTexts = append(flatTexts, t)
+			} else {
+				parts := splitTextAtLines(t, maxChars)
+				mapping[i] = span{start: len(flatTexts), count: len(parts)}
+				flatTexts = append(flatTexts, parts...)
+			}
 		}
-	}
 
-	// Embed all flat texts in sub-batches to avoid huge single requests.
-	allVecs, err := o.embedFlat(ctx, flatTexts)
-	if err != nil {
-		return nil, err
-	}
+		// Embed all flat texts in sub-batches to avoid huge single requests.
+		allVecs, err := o.embedFlat(ctx, flatTexts, maxChars)
+		if err != nil {
+			if !isContextOverflowError(err) {
+				return nil, err
+			}
+			lastErr = err
 
-	// Reassemble: average vectors for texts that were split.
-	results := make([][]float32, len(texts))
-	for i, m := range mapping {
-		if m.count == 1 {
-			results[i] = allVecs[m.start]
-		} else {
-			results[i] = averageVectors(allVecs[m.start : m.start+m.count])
+			nextMaxChars := maxChars / 2
+			if nextMaxChars < minAdaptiveMaxInputChars {
+				nextMaxChars = minAdaptiveMaxInputChars
+			}
+			if nextMaxChars >= maxChars {
+				return nil, fmt.Errorf("ollama context overflow after %d attempts; final max input chars=%d: %w", attempt, maxChars, lastErr)
+			}
+
+			maxChars = nextMaxChars
+			o.SetMaxInputChars(maxChars)
+			continue
 		}
+
+		// Reassemble: average vectors for texts that were split.
+		results := make([][]float32, len(texts))
+		for i, m := range mapping {
+			if m.count == 1 {
+				results[i] = allVecs[m.start]
+			} else {
+				results[i] = averageVectors(allVecs[m.start : m.start+m.count])
+			}
+		}
+		return results, nil
 	}
 
-	return results, nil
+	return nil, fmt.Errorf("ollama context overflow after %d attempts; final max input chars=%d: %w", maxAdaptiveEmbedAttempts, maxChars, lastErr)
 }
 
 // embedFlat sends texts to Ollama in sub-batches and returns one vector per text.
 // Sub-batches are sized by total character count to stay within model context limits.
-func (o *OllamaClient) embedFlat(ctx context.Context, texts []string) ([][]float32, error) {
-	maxBatchChars := o.MaxInputChars()
+func (o *OllamaClient) embedFlat(ctx context.Context, texts []string, maxBatchChars int) ([][]float32, error) {
+	if maxBatchChars <= 0 {
+		maxBatchChars = o.MaxInputChars()
+	}
 
 	var all [][]float32
 	batchStart := 0
@@ -227,7 +265,11 @@ func (o *OllamaClient) doEmbed(ctx context.Context, texts []string) ([][]float32
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama embed returned %d: %s", resp.StatusCode, string(respBody))
+		responseText := string(respBody)
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(responseText), "input length exceeds the context length") {
+			return nil, &contextOverflowError{statusCode: resp.StatusCode, body: responseText}
+		}
+		return nil, fmt.Errorf("ollama embed returned %d: %s", resp.StatusCode, responseText)
 	}
 
 	var result ollamaEmbedResponse
@@ -246,31 +288,48 @@ func (o *OllamaClient) doEmbed(ctx context.Context, texts []string) ([][]float32
 	return result.Embeddings, nil
 }
 
-// splitTextAtLines splits text into pieces of at most maxChars, breaking at
-// newline boundaries to preserve readable code context. Lines that exceed
-// maxChars on their own are hard-truncated to avoid exceeding model context.
-func splitTextAtLines(text string, maxChars int) []string {
-	lines := strings.Split(text, "\n")
-	var parts []string
-	var buf strings.Builder
+type contextOverflowError struct {
+	statusCode int
+	body       string
+}
 
-	for _, line := range lines {
-		// Hard-truncate lines that exceed the limit on their own.
-		if len(line) > maxChars {
-			line = line[:maxChars]
-		}
-		// If adding this line would exceed the limit, flush the buffer.
-		if buf.Len() > 0 && buf.Len()+1+len(line) > maxChars {
-			parts = append(parts, buf.String())
-			buf.Reset()
-		}
-		if buf.Len() > 0 {
-			buf.WriteByte('\n')
-		}
-		buf.WriteString(line)
+func (e *contextOverflowError) Error() string {
+	return fmt.Sprintf("ollama embed returned %d: %s", e.statusCode, e.body)
+}
+
+func isContextOverflowError(err error) bool {
+	var contextErr *contextOverflowError
+	return errors.As(err, &contextErr)
+}
+
+// splitTextAtLines splits text into pieces of at most maxChars, breaking at
+// newline boundaries when possible. If no newline exists in the current window,
+// it hard-wraps at maxChars. Content is preserved without truncation.
+func splitTextAtLines(text string, maxChars int) []string {
+	if text == "" {
+		return []string{""}
 	}
-	if buf.Len() > 0 {
-		parts = append(parts, buf.String())
+	if maxChars <= 0 || len(text) <= maxChars {
+		return []string{text}
+	}
+
+	var parts []string
+	for start := 0; start < len(text); {
+		if len(text)-start <= maxChars {
+			parts = append(parts, text[start:])
+			break
+		}
+
+		windowEnd := start + maxChars
+		if nl := strings.LastIndexByte(text[start:windowEnd], '\n'); nl >= 0 {
+			splitAt := start + nl + 1 // include newline to preserve exact content.
+			parts = append(parts, text[start:splitAt])
+			start = splitAt
+			continue
+		}
+
+		parts = append(parts, text[start:windowEnd])
+		start = windowEnd
 	}
 
 	return parts
