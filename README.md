@@ -2,7 +2,8 @@
 
 Semantic code search for large codebases. Indexes source code using AST-aware chunking and embeddings, stores vectors in Milvus, and provides fast natural-language search over code.
 
-Built for AI coding agents that burn tokens on exploratory grep/glob searches. Give them `cs search` instead.
+> **Benchmark note:** A/B testing (88 agent invocations, codebases up to 250K LOC, Sonnet 4.6) showed `cs search` saves **14.5% tokens on conceptual queries** by surfacing relevant files from the semantic index instead of agents reading 30+ files blind. 
+> Grep already handles lexical/reference search optimally — `cs search` fills the gap Grep can't: "how does X work?" across a large codebase. Shorter instructions (7 lines) outperformed verbose ones (29 lines) by 15 percentage points.
 
 ## How it works
 
@@ -174,10 +175,10 @@ To make an agent reliably use `cs search`, add the following instruction to the 
 | Codex       | `AGENTS.md` or `AGENTS.override.md`  |
 
 ```markdown
-Use `cs search "<query>"` for semantic code search.
-When a request is about behavior, purpose, or functionality rather than an exact string or file name, start with `cs search "<query>"` instead of grep, glob, or broad file reads.
-Use grep/find for exact text, file/path discovery, comments, TODOs, log messages, or config keys.
-Read full files only after `cs search` has identified relevant locations, or when editing or verifying surrounding context.
+Use `cs search "<query>"` via Bash for conceptual questions when you don't know which files matter.
+Use Grep for exact text, identifiers, patterns, and class names.
+Do NOT use cs search for exact-match lookups.
+Do NOT read 5+ files to understand a feature — cs search ranks them for you.
 ```
 > [!IMPORTANT]
 > Add this instruction to the **project-level** config file if you want it to apply automatically. `cs` depends on a per-project index, so enabling it globally would make agents try to use `cs search` in unrelated projects that have not been indexed.
@@ -196,25 +197,15 @@ A correct run should start with `cs search`. If the agent starts with `grep`, `g
 
 ### Use `codesight` together with `symgrep`
 
-For maximum token efficiency, combine `cs search` for semantic discovery with [symgrep](https://github.com/blankmi/symgrep) for surgical symbol extraction.
+Combine `cs search` for semantic discovery with [symgrep](https://github.com/blankmi/symgrep) `extract` for surgical code reading from large files. The recommended agent config above already includes both tools — `cs search` for understanding, `symgrep extract` for reading less.
 
-Include this **Master Search Strategy** in your agent's project-level configuration (`GEMINI.md`, `CLAUDE.md`, `AGENTS.md`, etc.):
+Each tool stays in its lane:
 
-```markdown
-# Master Search Strategy
-1. **Semantic Discovery:** For any inquiry about behavior or logic ("How...", "Where is..."), **ALWAYS** start with `cs search "<query>"`.
-2. **Symbol Mapping:** Once a relevant file is found, use `symgrep list -f <path>` to identify relevant functions, classes, or methods.
-3. **Surgical Extraction:** Use `symgrep extract -f <path> -s <symbol>` to retrieve code. Avoid `read_file` for structural elements.
-4. **Lexical Fallback:** Use `grep` only for exact strings (logs, constants, TODOs) or if semantic search is unsuccessful.
-
-# Search Guardrails
-- **NEVER** start with `grep` for "How", "Where", or "Why". Use `cs search`.
-- **NEVER** use `read_file` for structural elements if `symgrep` is available.
-- **NEVER** assume `grep` is more efficient than `cs` for codebase mapping.
-
-# The Golden Path
-`cs search` (locate file) → `symgrep list` (locate symbol) → `symgrep extract` (read code)
-```
+| Action | Tool | Why |
+|---|---|---|
+| Search for text/identifiers | Grep | Models already use Grep efficiently — no instruction needed |
+| Understand a feature/flow | `cs search` | Embedding-based ranking finds relevant files without reading everything |
+| Read one symbol from a large file | `symgrep extract` | Avoids loading 200+ irrelevant lines into context |
 
 ### Allowlisting `cs` for autonomous use
 
