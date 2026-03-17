@@ -27,3 +27,5 @@ Thumbs.db
 
 # Milvus data (if running locally)
 milvus_data/
+
+.ck_env
