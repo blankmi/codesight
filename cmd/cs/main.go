@@ -628,13 +628,11 @@ func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, e
 
 		// Attempt LSP startup; on any failure, fall through to grep fallback
 		// instead of hard-erroring. This covers: binary not found, binary
-		// crashes on startup, lifecycle Ensure failures, client init failures.
+		// crashes on startup, client init failures.
 		if err == nil {
-			if _, lspErr := lsp.NewLifecycle(registry).Ensure(ctx, opts.WorkspaceRoot, language); lspErr == nil {
-				c, lspErr := startRefsLSPClient(ctx, spec, opts.WorkspaceRoot)
-				if lspErr == nil {
-					client = c
-				}
+			c, lspErr := startRefsLSPClient(ctx, spec, opts.WorkspaceRoot)
+			if lspErr == nil {
+				client = c
 			}
 		}
 		defer func() {
@@ -672,10 +670,6 @@ func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (str
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", callersMissingLSPError(ctx, opts, spec)
 		}
-		return "", err
-	}
-
-	if _, err := lsp.NewLifecycle(registry).Ensure(ctx, opts.WorkspaceRoot, language); err != nil {
 		return "", err
 	}
 
@@ -717,10 +711,6 @@ func executeImplementsCommand(ctx context.Context, opts implementsCommandOptions
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", implementsMissingLSPError(ctx, opts, spec)
 		}
-		return "", err
-	}
-
-	if _, err := lsp.NewLifecycle(registry).Ensure(ctx, opts.WorkspaceRoot, language); err != nil {
 		return "", err
 	}
 

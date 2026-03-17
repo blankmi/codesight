@@ -262,16 +262,10 @@ func TestExecuteCallersCommandReusesLifecycleBetweenInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first executeCallersCommand returned error: %v", err)
 	}
-	firstPID := readCallersLifecyclePID(t, stateDir, workspace, "go")
 
 	secondOutput, err := executeCallersCommand(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("second executeCallersCommand returned error: %v", err)
-	}
-	secondPID := readCallersLifecyclePID(t, stateDir, workspace, "go")
-
-	if firstPID != secondPID {
-		t.Fatalf("lifecycle pid mismatch: first=%d second=%d", firstPID, secondPID)
 	}
 
 	for _, output := range []string{firstOutput, secondOutput} {
