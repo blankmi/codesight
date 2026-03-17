@@ -27,3 +27,7 @@ Thumbs.db
 
 # Milvus data (if running locally)
 milvus_data/
+
+# Context-Kernel
+runs
+.ck_env

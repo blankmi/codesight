@@ -1,0 +1,16 @@
+- **Purpose**: Final archaeology quality gate with pass/fail notes.
+- **Last verified**: 2026-03-17
+- **Source**: mixed
+
+- [x] PASS - Every artifact has Purpose, Last verified, and Source headers. Note: checked required files under `.context/` and root `AGENTS.md`.
+- [x] PASS - Every fact is labeled as `reported`, `observed`, or `verified`. Note: factual statements in context artifacts include provenance tags or source fields.
+- [x] PASS - All TODO items are explicit and discoverable (grep-able). Note: unresolved items use literal `TODO:`.
+- [x] PASS - AGENTS.md is under 100 lines and actionable. Note: 69 lines (`wc -l AGENTS.md`).
+- [x] PASS - Protected paths include both developer-reported and scan-discovered paths. Note: includes `docs/**`, `.prompts/**`, `specs/**`, release workflow, and `bin/**`.
+- [x] PASS - Module map includes file placement rules (where code of type X goes). Note: includes command-file split guidance and package placement rules.
+- [x] PASS - Risk register includes active work items to avoid. Note: includes `docs/prd/.../status.md` drift risk.
+- [x] PASS - Build/test commands have been verified if possible (not just reported). Note: `make build`, `go test ./...`, `make test`, `make lint`, `bin/cs --help`, and runtime checks were executed.
+- [x] PASS - Frontend/UI patterns are documented if the project has a UI. Note: explicitly documented as CLI-only.
+- [x] PASS - Conventions are captured (naming, annotations, patterns agents must follow). Note: command-handler split, ignore matcher usage, LSP fallback contract, error wrapping.
+- [x] PASS - QA questions prioritize agent-safety-critical ambiguities. Note: 12 prioritized questions resolved across runtime/architecture/data/testing/deployment/ownership.
+- [x] PASS - Handoff steps are low-risk and independently verifiable. Note: documented in `/.context/handoff/next_5_safe_steps.md`.

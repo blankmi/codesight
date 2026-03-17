@@ -1,0 +1,85 @@
+project:
+  name: "codesight"
+  git_url: "https://gitlab.dev.evia.de:4443/m.blank/codesight.git"
+  branch: "feat/project_config"
+  git_skip_ssl: true
+
+docker:
+  # Add extra hosts to the container's /etc/hosts file
+  extra_hosts:
+    - "gitlab.dev.evia.de:host-gateway"
+  network_mode: "host"
+
+agents:
+  default: "codex"
+  overrides:
+    planner: "claude-code"
+  claude-code:
+    docker:
+      image: "ck-claude-code-go:latest"
+    models:
+      default: "opus"
+  codex:
+    docker:
+      image: "ck-codex-go:latest"
+      binds:
+        - "${HOME}/.codex/config.toml:/root/.codex/config.toml:ro"
+        - "${HOME}/.codex/auth.json:/root/.codex/auth.json:ro"
+    models:
+      default: "gpt-5.3-codex"
+  gemini:
+    models:
+      default: "gemini-3-flash-preview"
+    docker:
+      image: "ck-gemini-go:latest"
+
+# One-time setup configuration (used by 'ck init')
+init:
+  seed_facts:
+    project:
+      name: "Codesight"
+      description: "Unified code intelligence CLI for large codebases."
+    language:
+      primary: "Go"
+    build:
+      build_command: "make build"
+      test_command: "go test ./..."
+      run_command: "bin/cs --help"
+    time_budget: standard
+
+# Implementation workflow configuration (used by 'ck run')
+phases:
+  planner:
+    enabled: true
+    request: "Introduce a `.codesight/` directory at the project root"
+    documents:
+      - path: "docs/prd-project-config.md"
+        description: "Project Configuration Requirements Document"
+
+  worker:
+    enabled: true
+    parallelism: 1
+    max_rework: 3
+
+  reviewer:
+    enabled: true
+
+  reflector:
+    enabled: true
+
+  force_human_feedback_after_each_phase: false
+
+notifications:
+  type: none
+
+vcs:
+  type: "gitlab"
+  token_env: "GIT_TOKEN"
+  auto_create_pr: true
+  auto_merge_pr: false
+  post_review_comments: true
+  update_labels: true
+
+secrets:
+  claude_code_oauth_token: "${CLAUDE_CODE_OAUTH_TOKEN}"
+  git_token: "${GIT_TOKEN}"

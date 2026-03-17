@@ -2,16 +2,25 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	configpkg "github.com/blankbytes/codesight/pkg/config"
 	"github.com/blankbytes/codesight/pkg/lsp"
+	"github.com/spf13/cobra"
 )
+
+const ollamaMaxInputCharsEnv = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
 
 func TestRunWithTimeoutWrapsTimeoutErrors(t *testing.T) {
 	timeout := 20 * time.Millisecond
@@ -150,8 +159,10 @@ func TestCapMaxInputChars(t *testing.T) {
 }
 
 func TestWrapVectorStoreConnectErrorIncludesAddress(t *testing.T) {
-	t.Setenv("CODESIGHT_DB_ADDRESS", "milvus.example.com:19530")
-	err := wrapVectorStoreConnectError(errors.New("connection refused"))
+	cfg := configpkg.Defaults()
+	cfg.DB.Address = "milvus.example.com:19530"
+
+	err := wrapVectorStoreConnectErrorForConfig(cfg, errors.New("connection refused"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -168,9 +179,11 @@ func TestWrapVectorStoreConnectErrorIncludesAddress(t *testing.T) {
 }
 
 func TestWrapEmbedderConnectErrorIncludesHostAndModel(t *testing.T) {
-	t.Setenv("CODESIGHT_OLLAMA_HOST", "http://ollama.local:11434")
-	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "custom-embed")
-	err := wrapEmbedderConnectError(errors.New("connection refused"))
+	cfg := configpkg.Defaults()
+	cfg.Embedding.OllamaHost = "http://ollama.local:11434"
+	cfg.Embedding.Model = "custom-embed"
+
+	err := wrapEmbedderConnectErrorForConfig(cfg, errors.New("connection refused"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -230,4 +243,218 @@ func TestDetectRefsLanguageRespectsCsignore(t *testing.T) {
 	if language != "go" {
 		t.Fatalf("language = %q, want %q", language, "go")
 	}
+}
+
+func TestConfigIntegration_EnvVarsStillWork(t *testing.T) {
+	clearTestEnv(t)
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	projectDir := t.TempDir()
+	var seenModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		if r.URL.Path != "/api/embed" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode embed request: %v", err)
+		}
+		seenModel = payload.Model
+
+		_, _ = w.Write([]byte(`{"embeddings":[[0.1,0.2,0.3]]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("CODESIGHT_OLLAMA_HOST", server.URL)
+	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model-override")
+
+	originalRunE := searchCmd.RunE
+	searchCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		_, err := newEmbedder(currentConfig()).Embed(cmd.Context(), "hello")
+		return err
+	}
+	t.Cleanup(func() {
+		searchCmd.RunE = originalRunE
+	})
+
+	_, _, err := executeRootCommand(t, "search", "hello", "--path", projectDir)
+	if err != nil {
+		t.Fatalf("search command returned error: %v", err)
+	}
+
+	if seenModel != "env-model-override" {
+		t.Fatalf("embed request model = %q, want %q", seenModel, "env-model-override")
+	}
+}
+
+func TestConfigIntegration_DefaultsUnchanged(t *testing.T) {
+	clearTestEnv(t)
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	projectDir := t.TempDir()
+
+	originalRunE := statusCmd.RunE
+	statusCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		cfg := currentConfig()
+
+		if cfg.DB.Type != "milvus" {
+			t.Fatalf("DB.Type = %q, want %q", cfg.DB.Type, "milvus")
+		}
+		if cfg.DB.Address != "localhost:19530" {
+			t.Fatalf("DB.Address = %q, want %q", cfg.DB.Address, "localhost:19530")
+		}
+		if cfg.DB.Token != "" {
+			t.Fatalf("DB.Token = %q, want empty", cfg.DB.Token)
+		}
+
+		if cfg.Embedding.OllamaHost != "http://127.0.0.1:11434" {
+			t.Fatalf("Embedding.OllamaHost = %q, want %q", cfg.Embedding.OllamaHost, "http://127.0.0.1:11434")
+		}
+		if cfg.Embedding.Model != "nomic-embed-text" {
+			t.Fatalf("Embedding.Model = %q, want %q", cfg.Embedding.Model, "nomic-embed-text")
+		}
+		if cfg.Embedding.MaxInputChars != 0 {
+			t.Fatalf("Embedding.MaxInputChars = %d, want 0", cfg.Embedding.MaxInputChars)
+		}
+
+		return nil
+	}
+	t.Cleanup(func() {
+		statusCmd.RunE = originalRunE
+	})
+
+	_, _, err := executeRootCommand(t, "status", projectDir)
+	if err != nil {
+		t.Fatalf("status command returned error: %v", err)
+	}
+}
+
+func TestJdtlsDataDir_WithCodesightDir(t *testing.T) {
+	workspace := t.TempDir()
+	codesightDir := filepath.Join(workspace, ".codesight")
+	if err := os.MkdirAll(codesightDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(.codesight) returned error: %v", err)
+	}
+
+	got, err := jdtlsDataDir(workspace)
+	if err != nil {
+		t.Fatalf("jdtlsDataDir returned error: %v", err)
+	}
+
+	want := filepath.Join(codesightDir, "lsp", "java", "jdtls-data")
+	if got != want {
+		t.Fatalf("jdtlsDataDir() = %q, want %q", got, want)
+	}
+
+	info, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("expected jdtls directory to exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("jdtls data path %q is not a directory", got)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("jdtls data directory permissions = %#o, expected user-only permissions", info.Mode().Perm())
+	}
+}
+
+func TestJdtlsDataDir_WithoutCodesightDir(t *testing.T) {
+	workspace := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
+
+	got, err := jdtlsDataDir(workspace)
+	if err != nil {
+		t.Fatalf("jdtlsDataDir returned error: %v", err)
+	}
+
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(workspace)))
+	want := filepath.Join(stateDir, "jdtls-data", hash[:16])
+	if got != want {
+		t.Fatalf("jdtlsDataDir() = %q, want %q", got, want)
+	}
+
+	info, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("expected fallback jdtls directory to exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("fallback jdtls data path %q is not a directory", got)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("fallback jdtls directory permissions = %#o, expected user-only permissions", info.Mode().Perm())
+	}
+}
+
+func TestJdtlsDataDir_GitignoreCreated(t *testing.T) {
+	workspace := t.TempDir()
+	codesightDir := filepath.Join(workspace, ".codesight")
+	if err := os.MkdirAll(codesightDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(.codesight) returned error: %v", err)
+	}
+
+	if _, err := jdtlsDataDir(workspace); err != nil {
+		t.Fatalf("jdtlsDataDir returned error: %v", err)
+	}
+
+	gitignorePath := filepath.Join(codesightDir, ".gitignore")
+	content, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("ReadFile(.gitignore) returned error: %v", err)
+	}
+	if string(content) != "lsp/\n" {
+		t.Fatalf(".gitignore content = %q, want %q", string(content), "lsp/\n")
+	}
+}
+
+func TestJdtlsDataDir_GitignoreNotOverwritten(t *testing.T) {
+	workspace := t.TempDir()
+	codesightDir := filepath.Join(workspace, ".codesight")
+	if err := os.MkdirAll(codesightDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(.codesight) returned error: %v", err)
+	}
+
+	gitignorePath := filepath.Join(codesightDir, ".gitignore")
+	initialContent := "cache/\ncustom"
+	if err := os.WriteFile(gitignorePath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(.gitignore) returned error: %v", err)
+	}
+
+	if _, err := jdtlsDataDir(workspace); err != nil {
+		t.Fatalf("jdtlsDataDir returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("ReadFile(.gitignore) returned error: %v", err)
+	}
+
+	want := initialContent + "\nlsp/\n"
+	if string(content) != want {
+		t.Fatalf(".gitignore content = %q, want %q", string(content), want)
+	}
+}
+
+func parseOllamaMaxInputCharsOverride() (int, error) {
+	raw := strings.TrimSpace(os.Getenv(ollamaMaxInputCharsEnv))
+	if raw == "" {
+		return 0, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", ollamaMaxInputCharsEnv, raw)
+	}
+	return n, nil
 }

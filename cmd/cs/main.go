@@ -13,12 +13,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	pkg "github.com/blankbytes/codesight/pkg"
+	configpkg "github.com/blankbytes/codesight/pkg/config"
 	"github.com/blankbytes/codesight/pkg/embedding"
 	extractpkg "github.com/blankbytes/codesight/pkg/extract"
 	csignore "github.com/blankbytes/codesight/pkg/ignore"
@@ -30,7 +30,6 @@ import (
 
 const (
 	interactiveNetworkTimeout = 1 * time.Second
-	ollamaMaxInputCharsEnv    = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
 	refsLSPShutdownTimeout    = 2 * time.Second
 )
 
@@ -43,6 +42,13 @@ func main() {
 var rootCmd = &cobra.Command{
 	Use:   "cs",
 	Short: "codesight — semantic code search",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if shouldSkipRuntimeConfigLoad(cmd) {
+			runtimeConfig = configpkg.Defaults()
+			return nil
+		}
+		return loadRuntimeConfig(cmd, args)
+	},
 }
 
 var indexCmd = &cobra.Command{
@@ -140,6 +146,8 @@ var (
 	runCallersCommand    = executeCallersCommand
 	runImplementsCommand = executeImplementsCommand
 
+	runtimeConfig = configpkg.Defaults()
+
 	errNoSupportedRefsLanguage = errors.New("no supported LSP language detected")
 )
 
@@ -178,6 +186,8 @@ func init() {
 	rootCmd.AddCommand(implementsCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(clearCmd)
+	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(initCmd)
 }
 
 func newLogger() *slog.Logger {
@@ -188,22 +198,72 @@ func newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
-func newStore() (vectorstore.Store, error) {
-	dbType := envOrDefault("CODESIGHT_DB_TYPE", "milvus")
-	switch dbType {
-	case "milvus":
-		address := envOrDefault("CODESIGHT_DB_ADDRESS", "localhost:19530")
-		token := os.Getenv("CODESIGHT_DB_TOKEN")
-		return vectorstore.NewMilvusStore(address, token), nil
+func loadRuntimeConfig(cmd *cobra.Command, args []string) error {
+	projectPath, err := configProjectPath(cmd, args)
+	if err != nil {
+		return fmt.Errorf("resolve project path for config: %w", err)
+	}
+
+	cfg, err := configpkg.LoadConfig(projectPath)
+	if err != nil {
+		return err
+	}
+	runtimeConfig = cfg
+	return nil
+}
+
+func shouldSkipRuntimeConfigLoad(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	return cmd.Name() == initCmd.Name()
+}
+
+func currentConfig() *configpkg.Config {
+	if runtimeConfig == nil {
+		return configpkg.Defaults()
+	}
+	return runtimeConfig
+}
+
+func configProjectPath(cmd *cobra.Command, args []string) (string, error) {
+	switch cmd.Name() {
+	case indexCmd.Name(), statusCmd.Name(), clearCmd.Name(), configCmd.Name():
+		if len(args) > 0 {
+			return args[0], nil
+		}
+		return ".", nil
+	case searchCmd.Name():
+		pathFlag, err := cmd.Flags().GetString("path")
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(pathFlag) == "" {
+			return ".", nil
+		}
+		return pathFlag, nil
+	case refsCmd.Name(), callersCmd.Name(), implementsCmd.Name():
+		pathFlag, err := cmd.Flags().GetString("path")
+		if err != nil {
+			return "", err
+		}
+		return resolveRefsWorkspaceRoot(pathFlag)
 	default:
-		return nil, fmt.Errorf("unsupported db type: %s", dbType)
+		return ".", nil
 	}
 }
 
-func newEmbedder() embedding.Provider {
-	host := envOrDefault("CODESIGHT_OLLAMA_HOST", "http://127.0.0.1:11434")
-	model := envOrDefault("CODESIGHT_EMBEDDING_MODEL", "nomic-embed-text")
-	return embedding.NewOllamaClient(host, model, "")
+func newStore(cfg *configpkg.Config) (vectorstore.Store, error) {
+	switch cfg.DB.Type {
+	case "milvus":
+		return vectorstore.NewMilvusStore(cfg.DB.Address, cfg.DB.Token), nil
+	default:
+		return nil, fmt.Errorf("unsupported db type: %s", cfg.DB.Type)
+	}
+}
+
+func newEmbedder(cfg *configpkg.Config) embedding.Provider {
+	return embedding.NewOllamaClient(cfg.Embedding.OllamaHost, cfg.Embedding.Model, "")
 }
 
 func runWithTimeout(timeout time.Duration, action string, fn func(context.Context) error) error {
@@ -231,25 +291,26 @@ func wrapTimeoutError(action string, timeout time.Duration, err error) error {
 
 // wrapVectorStoreConnectError adds agent-friendly guidance to Milvus/Ollama connection failures.
 func wrapVectorStoreConnectError(err error) error {
+	return wrapVectorStoreConnectErrorForConfig(currentConfig(), err)
+}
+
+func wrapVectorStoreConnectErrorForConfig(cfg *configpkg.Config, err error) error {
 	if err == nil {
 		return nil
 	}
-	address := envOrDefault("CODESIGHT_DB_ADDRESS", "localhost:19530")
 	return fmt.Errorf(
 		"cs: Milvus not reachable at %s. Set CODESIGHT_DB_ADDRESS or start Milvus: %w",
-		address, err,
+		cfg.DB.Address, err,
 	)
 }
 
-func wrapEmbedderConnectError(err error) error {
+func wrapEmbedderConnectErrorForConfig(cfg *configpkg.Config, err error) error {
 	if err == nil {
 		return nil
 	}
-	host := envOrDefault("CODESIGHT_OLLAMA_HOST", "http://127.0.0.1:11434")
-	model := envOrDefault("CODESIGHT_EMBEDDING_MODEL", "nomic-embed-text")
 	return fmt.Errorf(
 		"cs: Ollama not reachable at %s (model %s). Set CODESIGHT_OLLAMA_HOST or start Ollama: %w",
-		host, model, err,
+		cfg.Embedding.OllamaHost, cfg.Embedding.Model, err,
 	)
 }
 
@@ -260,26 +321,6 @@ func isTimeoutError(err error) bool {
 
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
-}
-
-func envOrDefault(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
-}
-
-func parseOllamaMaxInputCharsOverride() (int, error) {
-	raw := strings.TrimSpace(os.Getenv(ollamaMaxInputCharsEnv))
-	if raw == "" {
-		return 0, nil
-	}
-
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("%s must be a positive integer, got %q", ollamaMaxInputCharsEnv, raw)
-	}
-	return n, nil
 }
 
 func capMaxInputChars(base, cap int) int {
@@ -324,6 +365,8 @@ func detectGitCommit(path string) (string, error) {
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
+	cfg := currentConfig()
+
 	path := "."
 	if len(args) > 0 {
 		path = args[0]
@@ -344,12 +387,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	overrideMaxInputChars, err := parseOllamaMaxInputCharsOverride()
-	if err != nil {
-		return err
-	}
-
-	store, err := newStore()
+	store, err := newStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -357,13 +395,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
 		return store.Connect(ctx)
 	}); err != nil {
-		return wrapVectorStoreConnectError(err)
+		return wrapVectorStoreConnectErrorForConfig(cfg, err)
 	}
 	defer store.Close()
 
 	ctx := context.Background()
 
-	embedder := newEmbedder()
+	embedder := newEmbedder(cfg)
 
 	// Auto-detect the model's context length and derive chunk limits.
 	var splitterOpts []splitter.Option
@@ -379,12 +417,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			logger.Warn("unable to detect model context length, using default", "error", err)
 		}
 
-		effectiveMaxInputChars := capMaxInputChars(oc.MaxInputChars(), overrideMaxInputChars)
+		effectiveMaxInputChars := capMaxInputChars(oc.MaxInputChars(), cfg.Embedding.MaxInputChars)
 		oc.SetMaxInputChars(effectiveMaxInputChars)
 		logger.Debug(
 			"using ollama max input chars",
 			"max_input_chars", effectiveMaxInputChars,
-			"override_max_input_chars", overrideMaxInputChars,
+			"override_max_input_chars", cfg.Embedding.MaxInputChars,
 		)
 		splitterOpts = append(splitterOpts, splitter.WithMaxChunkChars(effectiveMaxInputChars))
 	}
@@ -405,10 +443,12 @@ func runIndex(cmd *cobra.Command, args []string) error {
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
+	cfg := currentConfig()
+
 	query := strings.Join(args, " ")
 	logger := newLogger()
 
-	store, err := newStore()
+	store, err := newStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -416,7 +456,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
 		return store.Connect(ctx)
 	}); err != nil {
-		return wrapVectorStoreConnectError(err)
+		return wrapVectorStoreConnectErrorForConfig(cfg, err)
 	}
 	defer store.Close()
 
@@ -440,7 +480,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	searcher := &pkg.Searcher{
 		Store:    store,
-		Embedder: newEmbedder(),
+		Embedder: newEmbedder(cfg),
 		Logger:   logger,
 	}
 
@@ -455,7 +495,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		})
 		return err
 	}); err != nil {
-		return wrapEmbedderConnectError(err)
+		return wrapEmbedderConnectErrorForConfig(cfg, err)
 	}
 
 	fmt.Print(pkg.FormatResults(output))
@@ -864,7 +904,7 @@ func refsInitializeParams(workspaceRoot string, spec lsp.ServerSpec) (lsp.Initia
 	// This allows jdtls to run on Java 21+ while building projects that
 	// require an older JDK (e.g. Java 17 for hibernate enhancer).
 	if spec.Binary == "jdtls" {
-		if initOpts := jdtlsInitOptions(); initOpts != nil {
+		if initOpts := jdtlsInitOptions(currentConfig()); initOpts != nil {
 			params.InitializationOptions = initOpts
 		}
 	}
@@ -872,10 +912,97 @@ func refsInitializeParams(workspaceRoot string, spec lsp.ServerSpec) (lsp.Initia
 	return params, nil
 }
 
-// jdtlsDataDir returns a persistent workspace data directory for jdtls under
-// CODESIGHT_STATE_DIR. This allows jdtls to cache its project index across
-// restarts instead of re-syncing from scratch.
+// jdtlsDataDir returns a persistent workspace data directory for jdtls.
+// It prefers <workspace>/.codesight/lsp/java/jdtls-data when .codesight exists
+// and is writable, and falls back to CODESIGHT_STATE_DIR for compatibility.
 func jdtlsDataDir(workspaceRoot string) (string, error) {
+	if projectDir, err := projectJdtlsDataDir(workspaceRoot); err == nil && projectDir != "" {
+		return projectDir, nil
+	}
+	return fallbackJdtlsDataDir(workspaceRoot)
+}
+
+func projectJdtlsDataDir(workspaceRoot string) (string, error) {
+	codesightDir := filepath.Join(workspaceRoot, ".codesight")
+	info, err := os.Stat(codesightDir)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", codesightDir)
+	}
+	if err := ensureDirWritable(codesightDir); err != nil {
+		return "", err
+	}
+
+	dir := filepath.Join(codesightDir, "lsp", "java", "jdtls-data")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := ensureCodesightGitignore(codesightDir); err != nil {
+		return "", err
+	}
+
+	return dir, nil
+}
+
+func ensureDirWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".codesight-writable-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func ensureCodesightGitignore(codesightDir string) error {
+	const entry = "lsp/"
+	gitignorePath := filepath.Join(codesightDir, ".gitignore")
+
+	content, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return os.WriteFile(gitignorePath, []byte(entry+"\n"), 0o644)
+		}
+		return err
+	}
+
+	if gitignoreContainsLine(string(content), entry) {
+		return nil
+	}
+
+	file, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		if _, err := file.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+	_, err = file.WriteString(entry + "\n")
+	return err
+}
+
+func gitignoreContainsLine(content, entry string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == entry {
+			return true
+		}
+	}
+	return false
+}
+
+func fallbackJdtlsDataDir(workspaceRoot string) (string, error) {
 	stateDir, err := lsp.ResolveStateDir()
 	if err != nil {
 		return "", err
@@ -890,8 +1017,8 @@ func jdtlsDataDir(workspaceRoot string) (string, error) {
 
 // jdtlsInitOptions builds initializationOptions for jdtls, configuring a
 // separate JDK for Gradle builds via CODESIGHT_GRADLE_JAVA_HOME.
-func jdtlsInitOptions() map[string]any {
-	gradleJavaHome := os.Getenv("CODESIGHT_GRADLE_JAVA_HOME")
+func jdtlsInitOptions(cfg *configpkg.Config) map[string]any {
+	gradleJavaHome := cfg.LSP.Java.GradleJavaHome
 	if gradleJavaHome == "" {
 		return nil
 	}
@@ -1027,12 +1154,14 @@ func detectRefsLanguage(workspaceRoot string, registry *lsp.Registry) (string, e
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
+	cfg := currentConfig()
+
 	path := "."
 	if len(args) > 0 {
 		path = args[0]
 	}
 
-	store, err := newStore()
+	store, err := newStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -1040,7 +1169,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
 		return store.Connect(ctx)
 	}); err != nil {
-		return wrapVectorStoreConnectError(err)
+		return wrapVectorStoreConnectErrorForConfig(cfg, err)
 	}
 	defer store.Close()
 
@@ -1098,12 +1227,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runClear(cmd *cobra.Command, args []string) error {
+	cfg := currentConfig()
+
 	path := "."
 	if len(args) > 0 {
 		path = args[0]
 	}
 
-	store, err := newStore()
+	store, err := newStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -1111,7 +1242,7 @@ func runClear(cmd *cobra.Command, args []string) error {
 	if err := runWithTimeout(interactiveNetworkTimeout, "connecting to the vector store", func(ctx context.Context) error {
 		return store.Connect(ctx)
 	}); err != nil {
-		return wrapVectorStoreConnectError(err)
+		return wrapVectorStoreConnectErrorForConfig(cfg, err)
 	}
 	defer store.Close()
 

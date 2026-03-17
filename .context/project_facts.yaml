@@ -1,0 +1,162 @@
+# - **Purpose**: Single source of truth for high-confidence project facts used by planning/worker/reviewer agents.
+# - **Last verified**: 2026-03-17
+# - **Source**: mixed
+
+project:
+  name:
+    value: Codesight
+    source: reported
+  description:
+    value: Unified code intelligence CLI for large codebases.
+    source: reported
+  module_path:
+    value: github.com/blankbytes/codesight
+    source: observed # go.mod
+  repo_branch:
+    value: docs/context-kernel
+    source: verified # git rev-parse --abbrev-ref HEAD
+  repo_head:
+    value: bce794b
+    source: verified # git rev-parse --short HEAD
+
+language:
+  primary:
+    value: Go
+    source: reported
+  go_minimum_toolchain:
+    value: "1.25.7"
+    source: reported # QA answer
+  go_mod_version:
+    value: "1.25.7"
+    source: observed # go.mod
+  frameworks:
+    value: [cobra, tree-sitter, Milvus SDK]
+    source: observed # cmd/cs/main.go, go.mod
+
+build:
+  build_command:
+    value: make build
+    source: mixed # reported + verified
+  test_command:
+    value: go test ./...
+    source: mixed # reported + verified
+  run_command:
+    value: bin/cs --help
+    source: mixed # reported + verified
+  additional_commands:
+    value:
+      - make test
+      - make lint
+    source: observed # Makefile
+  integration_commands:
+    value:
+      - make test-integration  # requires Docker + Milvus; skip in agent containers
+    source: observed # Makefile
+
+deployment:
+  delivery_model:
+    value: Tag/manual GitHub release workflow creates Linux/macOS CLI binaries.
+    source: observed # .github/workflows/release.yml
+  merge_policy:
+    value: Agents must not merge; branch lifecycle is managed by CK orchestrator.
+    source: reported # QA answer
+  release_pipeline_policy:
+    value: Release pipeline is out of scope for agents unless explicitly requested.
+    source: reported # QA answer
+
+datastores:
+  - name: Milvus
+    role: vector store for semantic index/search
+    source: observed # pkg/vectorstore/milvus.go
+  - name: Ollama
+    role: embedding provider via HTTP API
+    source: observed # pkg/embedding/ollama.go
+  - name: Local filesystem state (${CODESIGHT_STATE_DIR:-~/.codesight})
+    role: LSP lifecycle state persistence
+    source: observed # pkg/lsp/lifecycle.go
+
+entrypoints:
+  - type: CLI
+    path: cmd/cs/main.go
+    commands: [index, search, extract, refs, callers, implements, status, clear, config, init]
+    source: observed
+  - type: Integration script
+    path: scripts/test-integration.sh
+    source: observed
+
+api_contract:
+  stable_surface:
+    value: CLI commands are the only intended stable public API surface.
+    source: reported # QA answer
+  pkg_api_stability:
+    value: pkg/* is not treated as stable external API.
+    source: reported # QA answer
+  breaking_changes_policy:
+    value: Breaking CLI changes are currently acceptable in early-stage development when task-scoped.
+    source: reported # QA answer
+
+constraints:
+  do_not_touch_seed:
+    value: []
+    source: reported # seed facts had no do_not_touch values
+  protected_paths:
+    value:
+      - docs/**
+      - .prompts/**
+      - specs/**
+      - .github/workflows/release.yml
+      - bin/**
+    source: mixed # reported + observed
+  conditional_paths:
+    value:
+      - agent-skills/** # editable only for explicitly scoped skill/tooling tasks
+    source: reported
+
+runtime_policy:
+  network_dependent_commands:
+    value: Allowed in normal execution environment (agent containers may run network-dependent commands).
+    source: reported # QA answer
+  shared_index_note:
+    value: Team reports no shared production cs index currently.
+    source: reported # QA answer
+
+testing_policy:
+  mandatory_gate:
+    value: All available tests/checks should pass before merge unless task says otherwise.
+    source: reported # QA answer
+  vectorstore_rule:
+    value: Add tests first for pkg/vectorstore behavior changes.
+    source: reported # QA answer
+  milvus_ollama_matrix_required:
+    value: false
+    source: reported # QA answer
+
+verification_log:
+  - item: make build
+    result: pass
+    source: verified
+  - item: go test ./...
+    result: pass
+    source: verified
+  - item: make test
+    result: pass
+    source: verified
+  - item: make lint
+    result: pass
+    source: verified
+  - item: bin/cs --help
+    result: pass
+    source: verified
+  - item: bin/cs status /workspace/repo
+    result: pass (reports stale index; indexed commit e3f64f1, HEAD bce794b)
+    source: verified
+  - item: bin/cs index /workspace/repo --branch docs/context-kernel --commit bce794b
+    result: fail (Ollama endpoint unavailable at 127.0.0.1:11434)
+    source: verified
+  - item: docker info
+    result: fail (docker command not found in this environment)
+    source: verified
+
+unknowns:
+  - item: TODO: authoritative non-release CI location/gates for GitLab-hosted repository
+    source: observed

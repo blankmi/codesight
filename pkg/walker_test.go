@@ -39,7 +39,9 @@ func TestWalkFiles_BasicWalk(t *testing.T) {
 func TestWalkFiles_IgnoresNodeModules(t *testing.T) {
 	dir := t.TempDir()
 
-	os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0755)
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	writeFile(t, filepath.Join(dir, "node_modules", "pkg", "index.js"), "module.exports = {}")
 	writeFile(t, filepath.Join(dir, "app.js"), "console.log('hi')")
 
@@ -61,7 +63,9 @@ func TestWalkFiles_RespectsGitignore(t *testing.T) {
 	writeFile(t, filepath.Join(dir, ".gitignore"), "*.generated.go\nbuild/")
 	writeFile(t, filepath.Join(dir, "main.go"), "package main")
 	writeFile(t, filepath.Join(dir, "types.generated.go"), "package main")
-	os.MkdirAll(filepath.Join(dir, "build"), 0755)
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	writeFile(t, filepath.Join(dir, "build", "output.go"), "package build")
 
 	files, err := WalkFiles(dir, nil)
@@ -90,7 +94,9 @@ func TestWalkFiles_RespectsCsignoreAlongsideGitignore(t *testing.T) {
 	writeFile(t, filepath.Join(dir, ".csignore"), "build/\n")
 	writeFile(t, filepath.Join(dir, "main.go"), "package main")
 	writeFile(t, filepath.Join(dir, "types.generated.go"), "package main")
-	os.MkdirAll(filepath.Join(dir, "build"), 0755)
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	writeFile(t, filepath.Join(dir, "build", "output.go"), "package build")
 
 	files, err := WalkFiles(dir, nil)
@@ -120,7 +126,9 @@ func TestWalkFiles_GitignoreDirectoryPatternDoesNotSubstringMatch(t *testing.T) 
 
 	writeFile(t, filepath.Join(dir, ".gitignore"), "build/\n")
 	writeFile(t, filepath.Join(dir, "rebuild.go"), "package main")
-	os.MkdirAll(filepath.Join(dir, "build"), 0755)
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	writeFile(t, filepath.Join(dir, "build", "output.go"), "package build")
 
 	files, err := WalkFiles(dir, nil)

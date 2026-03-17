@@ -133,7 +133,7 @@ func TestDetectContextLength(t *testing.T) {
 					return
 				}
 				resp := map[string]any{"model_info": tt.modelInfo}
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 			}))
 			defer srv.Close()
 

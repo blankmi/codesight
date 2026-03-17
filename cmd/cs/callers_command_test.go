@@ -489,41 +489,6 @@ func runCallersLSPHelperProcess(stdin io.Reader, stdout io.Writer) error {
 	}
 }
 
-func readCallersLifecyclePID(t *testing.T, stateDir, workspaceRoot, language string) int {
-	t.Helper()
-
-	absWorkspace, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		t.Fatalf("resolve workspace root: %v", err)
-	}
-
-	statePath := filepath.Join(stateDir, "lsp", lsp.StateKey(absWorkspace, language)+".json")
-	deadline := time.Now().Add(2 * time.Second)
-
-	for {
-		payload, err := os.ReadFile(statePath)
-		if err == nil {
-			var state struct {
-				PID int `json:"pid"`
-			}
-			if err := json.Unmarshal(payload, &state); err != nil {
-				t.Fatalf("decode lifecycle state %q: %v", statePath, err)
-			}
-			if state.PID <= 0 {
-				t.Fatalf("lifecycle state %q has invalid pid: %d", statePath, state.PID)
-			}
-			return state.PID
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("read lifecycle state %q: %v", statePath, err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("lifecycle state file not found after timeout: %s", statePath)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 func hasCallersHelperArg(arg string) bool {
 	for _, candidate := range os.Args[1:] {
 		if candidate == arg {
