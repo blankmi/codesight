@@ -29,22 +29,24 @@ func TestCollectionName_Prefix(t *testing.T) {
 
 func TestIsStale(t *testing.T) {
 	tests := []struct {
-		name   string
-		meta   *vectorstore.IndexMetadata
-		commit string
-		want   bool
+		name              string
+		meta              *vectorstore.IndexMetadata
+		commit            string
+		ignoreFingerprint string
+		want              bool
 	}{
-		{"nil metadata", nil, "abc123", true},
-		{"matching commit", &vectorstore.IndexMetadata{CommitSHA: "abc123"}, "abc123", false},
-		{"different commit", &vectorstore.IndexMetadata{CommitSHA: "abc123"}, "def456", true},
-		{"missing current commit", &vectorstore.IndexMetadata{CommitSHA: "abc123"}, "", true},
-		{"missing indexed commit", &vectorstore.IndexMetadata{CommitSHA: ""}, "abc123", true},
-		{"both commits missing", &vectorstore.IndexMetadata{CommitSHA: ""}, "", true},
+		{"nil metadata", nil, "abc123", "ignore-a", true},
+		{"matching commit and ignore rules", &vectorstore.IndexMetadata{CommitSHA: "abc123", IgnoreFingerprint: "ignore-a"}, "abc123", "ignore-a", false},
+		{"different commit", &vectorstore.IndexMetadata{CommitSHA: "abc123", IgnoreFingerprint: "ignore-a"}, "def456", "ignore-a", true},
+		{"different ignore rules", &vectorstore.IndexMetadata{CommitSHA: "abc123", IgnoreFingerprint: "ignore-a"}, "abc123", "ignore-b", true},
+		{"missing current commit", &vectorstore.IndexMetadata{CommitSHA: "abc123", IgnoreFingerprint: "ignore-a"}, "", "ignore-a", true},
+		{"missing indexed commit", &vectorstore.IndexMetadata{CommitSHA: "", IgnoreFingerprint: "ignore-a"}, "abc123", "ignore-a", true},
+		{"missing indexed ignore metadata", &vectorstore.IndexMetadata{CommitSHA: "abc123", IgnoreFingerprint: ""}, "abc123", "ignore-a", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsStale(tt.meta, tt.commit)
+			got := IsStale(tt.meta, tt.commit, tt.ignoreFingerprint)
 			if got != tt.want {
 				t.Errorf("IsStale() = %v, want %v", got, tt.want)
 			}
@@ -54,7 +56,7 @@ func TestIsStale(t *testing.T) {
 
 func TestStalenessInfo(t *testing.T) {
 	t.Run("nil metadata", func(t *testing.T) {
-		got := StalenessInfo(nil, "abc")
+		got := StalenessInfo(nil, "abc", "ignore-a")
 		if got != "not indexed" {
 			t.Errorf("got %q, want %q", got, "not indexed")
 		}
@@ -62,40 +64,60 @@ func TestStalenessInfo(t *testing.T) {
 
 	t.Run("up to date", func(t *testing.T) {
 		meta := &vectorstore.IndexMetadata{
-			CommitSHA:  "abc1234567890",
-			IndexedAt:  time.Now().Add(-30 * time.Minute),
-			FileCount:  42,
-			ChunkCount: 200,
+			CommitSHA:         "abc1234567890",
+			IgnoreFingerprint: "ignore-a",
+			IndexedAt:         time.Now().Add(-30 * time.Minute),
+			FileCount:         42,
+			ChunkCount:        200,
 		}
-		got := StalenessInfo(meta, "abc1234567890")
-		if got == "" {
-			t.Error("expected non-empty status")
-		}
-	})
-
-	t.Run("stale", func(t *testing.T) {
-		meta := &vectorstore.IndexMetadata{
-			CommitSHA:  "abc1234567890",
-			IndexedAt:  time.Now().Add(-2 * time.Hour),
-			FileCount:  42,
-			ChunkCount: 200,
-		}
-		got := StalenessInfo(meta, "def4567890123")
-		if got == "" {
-			t.Error("expected non-empty status")
+		got := StalenessInfo(meta, "abc1234567890", "ignore-a")
+		if got != "up to date — indexed 30m ago (42 files, 200 chunks)" {
+			t.Fatalf("unexpected status: %q", got)
 		}
 	})
 
-	t.Run("missing commit metadata", func(t *testing.T) {
+	t.Run("stale because ignore rules changed", func(t *testing.T) {
 		meta := &vectorstore.IndexMetadata{
-			CommitSHA:  "",
-			IndexedAt:  time.Now().Add(-5 * time.Minute),
-			FileCount:  10,
-			ChunkCount: 20,
+			CommitSHA:         "abc1234567890",
+			IgnoreFingerprint: "ignore-a",
+			IndexedAt:         time.Now().Add(-2 * time.Hour),
+			FileCount:         42,
+			ChunkCount:        200,
 		}
-		got := StalenessInfo(meta, "")
-		if got == "" {
-			t.Error("expected non-empty status")
+		got := StalenessInfo(meta, "abc1234567890", "ignore-b")
+		want := "stale — indexed 2h ago, ignore rules changed (42 files, 200 chunks)"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("stale because commit and ignore rules changed", func(t *testing.T) {
+		meta := &vectorstore.IndexMetadata{
+			CommitSHA:         "abc1234567890",
+			IgnoreFingerprint: "ignore-a",
+			IndexedAt:         time.Now().Add(-2 * time.Hour),
+			FileCount:         42,
+			ChunkCount:        200,
+		}
+		got := StalenessInfo(meta, "def4567890123", "ignore-b")
+		want := "stale — indexed 2h ago at abc1234, HEAD is now def4567 and ignore rules changed (42 files, 200 chunks)"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("missing indexed ignore metadata", func(t *testing.T) {
+		meta := &vectorstore.IndexMetadata{
+			CommitSHA:         "abc1234567890",
+			IgnoreFingerprint: "",
+			IndexedAt:         time.Now().Add(-5 * time.Minute),
+			FileCount:         10,
+			ChunkCount:        20,
+		}
+		got := StalenessInfo(meta, "abc1234567890", "ignore-a")
+		want := "stale — indexed 5m ago, missing indexed ignore metadata (10 files, 20 chunks)"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
 		}
 	})
 }

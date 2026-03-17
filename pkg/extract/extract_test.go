@@ -3,6 +3,7 @@ package extract
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -187,6 +188,75 @@ func TestExtractDirectoryModeDeterministicOrderingAndContracts(t *testing.T) {
 	file1, _ := payload[1]["file_path"].(string)
 	if file0 != filepath.ToSlash(filepath.Join(dir, "alpha.go")) || file1 != filepath.ToSlash(filepath.Join(dir, "nested", "bravo.py")) {
 		t.Fatalf("json file ordering mismatch: got [%s, %s]", file0, file1)
+	}
+}
+
+func TestExtractDirectoryModeRespectsCsignore(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".csignore"), []byte("nested/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alpha.go"), []byte("package main\n\nfunc DirTarget() string { return \"alpha\" }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(alpha.go) returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "bravo.go"), []byte("package main\n\nfunc DirTarget() string { return \"bravo\" }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(bravo.go) returned error: %v", err)
+	}
+
+	rawOut, err := Extract(dir, "DirTarget", "raw")
+	if err != nil {
+		t.Fatalf("Extract returned error: %v", err)
+	}
+	if strings.Contains(rawOut, "nested/bravo.go") {
+		t.Fatalf("output should skip .csignore-matched files, got: %s", rawOut)
+	}
+	if !strings.Contains(rawOut, "alpha.go") {
+		t.Fatalf("output missing visible file: %s", rawOut)
+	}
+}
+
+func TestExtractFileModeRejectsIgnoredTarget(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".csignore"), []byte("ignored.go\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+	target := filepath.Join(dir, "ignored.go")
+	if err := os.WriteFile(target, []byte("package main\n\nfunc DirTarget() string { return \"ignored\" }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(ignored.go) returned error: %v", err)
+	}
+
+	_, err := Extract(target, "DirTarget", "raw")
+	if err == nil {
+		t.Fatal("expected ignored target error, got nil")
+	}
+	if !strings.Contains(err.Error(), ".gitignore/.csignore") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExtractFileModeFindsProjectRootCsignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".csignore"), []byte("ignored.go\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+	sub := filepath.Join(root, "pkg", "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	target := filepath.Join(sub, "ignored.go")
+	if err := os.WriteFile(target, []byte("package sub\n\nfunc Deep() string { return \"deep\" }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	_, err := Extract(target, "Deep", "raw")
+	if err == nil {
+		t.Fatal("expected ignored target error from parent .csignore, got nil")
+	}
+	if !strings.Contains(err.Error(), ".gitignore/.csignore") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -83,6 +83,38 @@ func TestWalkFiles_RespectsGitignore(t *testing.T) {
 	}
 }
 
+func TestWalkFiles_RespectsCsignoreAlongsideGitignore(t *testing.T) {
+	dir := t.TempDir()
+
+	writeFile(t, filepath.Join(dir, ".gitignore"), "*.generated.go\n")
+	writeFile(t, filepath.Join(dir, ".csignore"), "build/\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main")
+	writeFile(t, filepath.Join(dir, "types.generated.go"), "package main")
+	os.MkdirAll(filepath.Join(dir, "build"), 0755)
+	writeFile(t, filepath.Join(dir, "build", "output.go"), "package build")
+
+	files, err := WalkFiles(dir, nil)
+	if err != nil {
+		t.Fatalf("WalkFiles error: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, f := range files {
+		rel, _ := filepath.Rel(dir, f)
+		got[rel] = true
+	}
+
+	if !got["main.go"] {
+		t.Error("expected main.go")
+	}
+	if got["types.generated.go"] {
+		t.Error("types.generated.go should be ignored via .gitignore")
+	}
+	if got["build/output.go"] {
+		t.Error("build/output.go should be ignored via .csignore")
+	}
+}
+
 func TestWalkFiles_GitignoreDirectoryPatternDoesNotSubstringMatch(t *testing.T) {
 	dir := t.TempDir()
 

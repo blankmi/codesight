@@ -11,19 +11,11 @@ import (
 	"sort"
 	"strings"
 
+	csignore "github.com/blankbytes/codesight/pkg/ignore"
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
 var errSymbolNotFound = errors.New("symbol not found")
-
-var directorySkipList = map[string]struct{}{
-	".git":         {},
-	"node_modules": {},
-	"vendor":       {},
-	"__pycache__":  {},
-	".idea":        {},
-	".vscode":      {},
-}
 
 // Extract resolves one named symbol from a file or directory target.
 func Extract(targetPath string, symbol string, format string) (string, error) {
@@ -45,7 +37,20 @@ func Extract(targetPath string, symbol string, format string) (string, error) {
 	}
 
 	if info.IsDir() {
-		return extractFromDirectory(targetPath, symbol, normalizedFormat)
+		matcher, err := csignore.NewMatcher(targetPath, nil)
+		if err != nil {
+			return "", fmt.Errorf("load ignore rules: %w", err)
+		}
+		return extractFromDirectory(targetPath, symbol, normalizedFormat, matcher)
+	}
+
+	matcherRoot := csignore.FindProjectRoot(filepath.Dir(targetPath))
+	matcher, err := csignore.NewMatcher(matcherRoot, nil)
+	if err != nil {
+		return "", fmt.Errorf("load ignore rules: %w", err)
+	}
+	if matcher.MatchesPath(targetPath) {
+		return "", fmt.Errorf("target path is ignored by .gitignore/.csignore: %s", filepath.ToSlash(targetPath))
 	}
 
 	return extractFromFile(targetPath, symbol, normalizedFormat)
@@ -83,8 +88,8 @@ func extractFromFile(path string, symbol string, format OutputFormat) (string, e
 	return string(encoded), nil
 }
 
-func extractFromDirectory(path string, symbol string, format OutputFormat) (string, error) {
-	files, err := collectSupportedFiles(path)
+func extractFromDirectory(path string, symbol string, format OutputFormat, matcher *csignore.Matcher) (string, error) {
+	files, err := collectSupportedFiles(path, matcher)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +126,7 @@ func extractFromDirectory(path string, symbol string, format OutputFormat) (stri
 	return string(encoded), nil
 }
 
-func collectSupportedFiles(root string) ([]string, error) {
+func collectSupportedFiles(root string, matcher *csignore.Matcher) ([]string, error) {
 	files := make([]string, 0)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -129,15 +134,16 @@ func collectSupportedFiles(root string) ([]string, error) {
 		}
 
 		if d.IsDir() {
-			if path != root {
-				if _, skip := directorySkipList[d.Name()]; skip {
-					return filepath.SkipDir
-				}
+			if path != root && matcher.MatchesPath(path) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		if !d.Type().IsRegular() {
+			return nil
+		}
+		if matcher.MatchesPath(path) {
 			return nil
 		}
 

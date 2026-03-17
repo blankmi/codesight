@@ -25,11 +25,12 @@ type SearchResult struct {
 
 // IndexMetadata tracks the state of an index for a project.
 type IndexMetadata struct {
-	Branch     string    `json:"branch"`
-	CommitSHA  string    `json:"commit_sha"`
-	IndexedAt  time.Time `json:"indexed_at"`
-	FileCount  int       `json:"file_count"`
-	ChunkCount int       `json:"chunk_count"`
+	Branch            string    `json:"branch"`
+	CommitSHA         string    `json:"commit_sha"`
+	IgnoreFingerprint string    `json:"ignore_fingerprint"`
+	IndexedAt         time.Time `json:"indexed_at"`
+	FileCount         int       `json:"file_count"`
+	ChunkCount        int       `json:"chunk_count"`
 }
 
 // Store is the interface for vector database backends.

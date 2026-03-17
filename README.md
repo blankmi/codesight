@@ -7,7 +7,7 @@ Unified code intelligence CLI for large codebases. `cs` combines semantic discov
 
 ## How it works
 
-1. **Walk** — traverses the repo respecting `.gitignore`
+1. **Walk** — traverses the repo respecting `.gitignore` and `.csignore`
 2. **Split** — extracts functions, classes, methods, and types using tree-sitter AST parsing (falls back to line-based chunking for unsupported languages)
 3. **Embed** — generates vectors via Ollama (default: `nomic-embed-text`)
 4. **Store** — inserts chunks + vectors into Milvus
@@ -171,6 +171,8 @@ All configuration is via environment variables:
 
 `cs index` auto-detects Ollama model context length when available, uses a conservative character budget, and adaptively retries with smaller limits on context-length overflow errors. `CODESIGHT_OLLAMA_MAX_INPUT_CHARS` can only lower that effective limit as a safety cap.
 
+`cs` also supports a root-level `.csignore` file. Its patterns are additive with `.gitignore` and apply to indexing, search result filtering, extraction, refs fallback/LSP result filtering, and LSP language detection within the command target root.
+
 ## Docker runtime model for LSP commands
 
 For `cs refs`, `cs callers`, and `cs implements`:
@@ -222,7 +224,7 @@ pkg/
 ├── indexer.go            # Indexing pipeline
 ├── searcher.go           # Search pipeline
 ├── version.go            # Index versioning + staleness
-└── walker.go             # .gitignore-aware file walker
+└── walker.go             # .gitignore/.csignore-aware file walker
 ```
 
 Packages are under `pkg/` (not `internal/`) so other tools can import codesight as a library.

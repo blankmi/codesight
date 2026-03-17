@@ -64,6 +64,9 @@ func TestIndexerAndSearcher_MilvusIntegration(t *testing.T) {
 	if meta == nil {
 		t.Fatal("expected metadata to be present after indexing")
 	}
+	if meta.IgnoreFingerprint == "" {
+		t.Fatal("expected ignore fingerprint to be present after indexing")
+	}
 	if meta.ChunkCount == 0 {
 		t.Fatal("expected chunk count > 0 after indexing")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/blankbytes/codesight/pkg/embedding"
+	csignore "github.com/blankbytes/codesight/pkg/ignore"
 	"github.com/blankbytes/codesight/pkg/splitter"
 	"github.com/blankbytes/codesight/pkg/vectorstore"
 )
@@ -49,6 +50,10 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) (*SearchOutpu
 	if err != nil {
 		return nil, fmt.Errorf("resolving path: %w", err)
 	}
+	matcher, err := csignore.NewMatcher(projectPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("loading ignore rules: %w", err)
+	}
 
 	collection := CollectionName(projectPath)
 	exists, err := s.Store.CollectionExists(ctx, collection)
@@ -87,7 +92,11 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) (*SearchOutpu
 	}
 
 	output := &SearchOutput{}
-	for i, result := range results {
+	for _, result := range results {
+		if searchResultIgnored(matcher, result.Document.FilePath) {
+			continue
+		}
+
 		chunk := splitter.Chunk{
 			Content:   result.Document.Content,
 			FilePath:  result.Document.FilePath,
@@ -98,7 +107,7 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) (*SearchOutpu
 		}
 
 		entry := SearchResultEntry{
-			Rank:        i + 1,
+			Rank:        len(output.Results) + 1,
 			FilePath:    result.Document.FilePath,
 			StartLine:   result.Document.StartLine,
 			EndLine:     result.Document.EndLine,
@@ -110,6 +119,13 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) (*SearchOutpu
 	}
 
 	return output, nil
+}
+
+func searchResultIgnored(matcher *csignore.Matcher, filePath string) bool {
+	if filepath.IsAbs(filePath) {
+		return matcher.MatchesPath(filePath)
+	}
+	return matcher.MatchesRelative(filePath)
 }
 
 // FormatResults returns a minimal plain-text representation of search results.

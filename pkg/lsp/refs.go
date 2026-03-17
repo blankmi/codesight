@@ -79,14 +79,6 @@ var (
 			SymbolKindConstant: {},
 		},
 	}
-	skippedFallbackDirs = map[string]struct{}{
-		".git":         {},
-		".idea":        {},
-		".vscode":      {},
-		"node_modules": {},
-		"vendor":       {},
-		"__pycache__":  {},
-	}
 )
 
 type grepFallbackSearcher struct{}
@@ -173,6 +165,11 @@ func (e *RefsEngine) findWithLSP(
 	symbol string,
 	kind string,
 ) (string, error) {
+	matcher, err := newWorkspaceIgnoreMatcher(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+
 	symbols, err := e.lookupSymbols(ctx, symbol)
 	if err != nil {
 		return "", &lspUnavailableError{
@@ -180,7 +177,7 @@ func (e *RefsEngine) findWithLSP(
 		}
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, symbol, kind)
+	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, kind)
 	if err != nil {
 		return "", err
 	}
@@ -206,7 +203,7 @@ func (e *RefsEngine) findWithLSP(
 		}
 	}
 
-	refs, err := toReferenceLines(workspaceRoot, references)
+	refs, err := toReferenceLines(workspaceRoot, matcher, references)
 	if err != nil {
 		return "", err
 	}
@@ -246,6 +243,7 @@ func (e *RefsEngine) lookupReferences(ctx context.Context, symbol SymbolInformat
 func resolveCandidates(
 	symbols []SymbolInformation,
 	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
 	symbol string,
 	kind string,
 ) ([]resolvedSymbol, error) {
@@ -262,6 +260,9 @@ func resolveCandidates(
 		path, err := documentURIToPath(match.Location.URI)
 		if err != nil {
 			return nil, err
+		}
+		if matcher != nil && matcher.MatchesPath(path) {
+			continue
 		}
 
 		candidates = append(candidates, resolvedSymbol{
@@ -312,7 +313,11 @@ func symbolKindLabel(kind SymbolKind) string {
 	}
 }
 
-func toReferenceLines(workspaceRoot string, references []Location) ([]referenceLine, error) {
+func toReferenceLines(
+	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
+	references []Location,
+) ([]referenceLine, error) {
 	if len(references) == 0 {
 		return nil, nil
 	}
@@ -323,6 +328,9 @@ func toReferenceLines(workspaceRoot string, references []Location) ([]referenceL
 		path, err := documentURIToPath(location.URI)
 		if err != nil {
 			return nil, err
+		}
+		if matcher != nil && matcher.MatchesPath(path) {
+			continue
 		}
 
 		lineNumber := location.Range.Start.Line + 1
@@ -423,7 +431,11 @@ func (grepFallbackSearcher) Find(
 	}
 
 	matches := make([]referenceLine, 0, 32)
-	err := filepath.WalkDir(workspaceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	matcher, err := newWorkspaceIgnoreMatcher(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(workspaceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -435,12 +447,15 @@ func (grepFallbackSearcher) Find(
 		}
 
 		if entry.IsDir() {
-			if shouldSkipFallbackDir(entry.Name()) {
+			if path != workspaceRoot && matcher.MatchesPath(path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !entry.Type().IsRegular() {
+			return nil
+		}
+		if matcher.MatchesPath(path) {
 			return nil
 		}
 
@@ -467,9 +482,4 @@ func (grepFallbackSearcher) Find(
 	}
 
 	return dedupeAndSortReferences(matches), nil
-}
-
-func shouldSkipFallbackDir(name string) bool {
-	_, skip := skippedFallbackDirs[name]
-	return skip
 }

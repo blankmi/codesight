@@ -72,13 +72,17 @@ func (e *ImplementsEngine) Find(ctx context.Context, opts ImplementsOptions) (st
 	if e.client == nil {
 		return "", formatMissingImplementsLSPError(opts.LSPBinary, opts.LSPInstall)
 	}
+	matcher, err := newWorkspaceIgnoreMatcher(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
 
 	symbols, err := e.lookupSymbols(ctx, symbol)
 	if err != nil {
 		return "", fmt.Errorf("workspace/symbol request failed: %w", err)
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, symbol, "")
+	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, "")
 	if err != nil {
 		return "", err
 	}
@@ -110,7 +114,7 @@ func (e *ImplementsEngine) Find(ctx context.Context, opts ImplementsOptions) (st
 		return "", fmt.Errorf("typeHierarchy/subtypes request failed: %w", err)
 	}
 
-	implementations, err := toImplementationLines(workspaceRoot, subtypes)
+	implementations, err := toImplementationLines(workspaceRoot, matcher, subtypes)
 	if err != nil {
 		return "", err
 	}
@@ -184,7 +188,11 @@ func (e *ImplementsEngine) lookupSubtypes(
 	return subtypes, nil
 }
 
-func toImplementationLines(workspaceRoot string, subtypes []typeHierarchyItem) ([]implementationLine, error) {
+func toImplementationLines(
+	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
+	subtypes []typeHierarchyItem,
+) ([]implementationLine, error) {
 	if len(subtypes) == 0 {
 		return nil, nil
 	}
@@ -194,6 +202,9 @@ func toImplementationLines(workspaceRoot string, subtypes []typeHierarchyItem) (
 		path, err := documentURIToPath(subtype.URI)
 		if err != nil {
 			return nil, err
+		}
+		if matcher != nil && matcher.MatchesPath(path) {
+			continue
 		}
 
 		line, _ := typeHierarchyPosition(subtype)

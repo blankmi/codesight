@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blankbytes/codesight/pkg/lsp"
 )
 
 func TestRunWithTimeoutWrapsTimeoutErrors(t *testing.T) {
@@ -201,5 +205,29 @@ func TestRootCommandIncludesExtractAndExistingCommands(t *testing.T) {
 		if !subcommands[want] {
 			t.Fatalf("root command is missing %q subcommand", want)
 		}
+	}
+}
+
+func TestDetectRefsLanguageRespectsCsignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".csignore"), []byte("*.py\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.go) returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte("def a():\n    pass\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(a.py) returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.py"), []byte("def b():\n    pass\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(b.py) returned error: %v", err)
+	}
+
+	language, err := detectRefsLanguage(root, lsp.NewRegistry())
+	if err != nil {
+		t.Fatalf("detectRefsLanguage returned error: %v", err)
+	}
+	if language != "go" {
+		t.Fatalf("language = %q, want %q", language, "go")
 	}
 }

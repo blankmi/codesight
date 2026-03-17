@@ -20,6 +20,7 @@ import (
 	pkg "github.com/blankbytes/codesight/pkg"
 	"github.com/blankbytes/codesight/pkg/embedding"
 	extractpkg "github.com/blankbytes/codesight/pkg/extract"
+	csignore "github.com/blankbytes/codesight/pkg/ignore"
 	"github.com/blankbytes/codesight/pkg/lsp"
 	"github.com/blankbytes/codesight/pkg/splitter"
 	"github.com/blankbytes/codesight/pkg/vectorstore"
@@ -139,14 +140,6 @@ var (
 	runImplementsCommand = executeImplementsCommand
 
 	errNoSupportedRefsLanguage = errors.New("no supported LSP language detected")
-	skippedRefsLanguageDirs    = map[string]struct{}{
-		".git":         {},
-		".idea":        {},
-		".vscode":      {},
-		"node_modules": {},
-		"vendor":       {},
-		"__pycache__":  {},
-	}
 )
 
 func init() {
@@ -898,19 +891,26 @@ func (t *refsProcessTransport) Close() error {
 func detectRefsLanguage(workspaceRoot string, registry *lsp.Registry) (string, error) {
 	countByLanguage := map[string]int{}
 	supportedLanguageCache := map[string]bool{}
+	matcher, err := csignore.NewMatcher(workspaceRoot, nil)
+	if err != nil {
+		return "", fmt.Errorf("load ignore rules: %w", err)
+	}
 
-	err := filepath.WalkDir(workspaceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(workspaceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 
 		if entry.IsDir() {
-			if shouldSkipRefsLanguageDir(entry.Name()) {
+			if path != workspaceRoot && matcher.MatchesPath(path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !entry.Type().IsRegular() {
+			return nil
+		}
+		if matcher.MatchesPath(path) {
 			return nil
 		}
 
@@ -948,11 +948,6 @@ func detectRefsLanguage(workspaceRoot string, registry *lsp.Registry) (string, e
 		}
 	}
 	return bestLanguage, nil
-}
-
-func shouldSkipRefsLanguageDir(name string) bool {
-	_, skip := skippedRefsLanguageDirs[name]
-	return skip
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -1006,7 +1001,17 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	currentCommit, err := detectGitCommit(path)
+	if err != nil {
+		currentCommit = ""
+	}
+	matcher, err := csignore.NewMatcher(absPath, nil)
+	if err != nil {
+		return fmt.Errorf("loading ignore rules: %w", err)
+	}
+
 	fmt.Printf("Collection: %s\n", collection)
+	fmt.Printf("Status:     %s\n", pkg.StalenessInfo(meta, currentCommit, matcher.Fingerprint()))
 	fmt.Printf("Branch:     %s\n", meta.Branch)
 	fmt.Printf("Commit:     %s\n", meta.CommitSHA)
 	fmt.Printf("Indexed:    %s\n", meta.IndexedAt.UTC().Format("2006-01-02 15:04:05 UTC"))

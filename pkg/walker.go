@@ -1,29 +1,12 @@
 package pkg
 
 import (
-	"bufio"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
-)
 
-// defaultIgnorePatterns are always excluded from indexing.
-var defaultIgnorePatterns = []string{
-	".git",
-	"node_modules",
-	"vendor",
-	"dist",
-	"build",
-	".next",
-	"__pycache__",
-	".pytest_cache",
-	".mypy_cache",
-	"target",
-	".idea",
-	".vscode",
-	".DS_Store",
-}
+	csignore "github.com/blankbytes/codesight/pkg/ignore"
+)
 
 // defaultExtensions are file extensions to include by default.
 var defaultExtensions = map[string]bool{
@@ -41,27 +24,24 @@ type WalkOptions struct {
 	MaxFileSizeKB int             // skip files larger than this (0 = no limit)
 }
 
-// WalkFiles traverses a directory tree, respecting .gitignore and returning
-// paths of source code files suitable for indexing.
+// WalkFiles traverses a directory tree, respecting .gitignore/.csignore and
+// returning paths of source code files suitable for indexing.
 func WalkFiles(root string, opts *WalkOptions) ([]string, error) {
-	if opts == nil {
-		opts = &WalkOptions{}
+	matcher, err := matcherForWalk(root, opts)
+	if err != nil {
+		return nil, err
 	}
 
-	extensions := opts.Extensions
-	if extensions == nil {
-		extensions = defaultExtensions
-	}
+	return walkFiles(root, opts, matcher)
+}
 
-	ignorePatterns := append([]string{}, defaultIgnorePatterns...)
-	ignorePatterns = append(ignorePatterns, opts.ExtraIgnore...)
-	gitignore := loadGitignore(root)
-	ignorePatterns = append(ignorePatterns, gitignore...)
+func matcherForWalk(root string, opts *WalkOptions) (*csignore.Matcher, error) {
+	return csignore.NewMatcher(root, extraIgnorePatterns(opts))
+}
 
-	maxSize := int64(0)
-	if opts.MaxFileSizeKB > 0 {
-		maxSize = int64(opts.MaxFileSizeKB) * 1024
-	}
+func walkFiles(root string, opts *WalkOptions, matcher *csignore.Matcher) ([]string, error) {
+	extensions := extensionsForWalk(opts)
+	maxSize := maxFileSizeBytes(opts)
 
 	var files []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -73,13 +53,13 @@ func WalkFiles(root string, opts *WalkOptions) ([]string, error) {
 		rel = filepath.ToSlash(rel)
 
 		if info.IsDir() {
-			if shouldIgnore(rel, info.Name(), ignorePatterns) {
+			if matcher.MatchesRelative(rel) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if shouldIgnore(rel, info.Name(), ignorePatterns) {
+		if matcher.MatchesRelative(rel) {
 			return nil
 		}
 
@@ -99,90 +79,23 @@ func WalkFiles(root string, opts *WalkOptions) ([]string, error) {
 	return files, err
 }
 
-func shouldIgnore(relPath string, name string, patterns []string) bool {
-	relPath = filepath.ToSlash(relPath)
-	relPath = strings.TrimPrefix(relPath, "./")
-	segments := strings.Split(relPath, "/")
-
-	for _, rawPattern := range patterns {
-		pattern := strings.TrimSpace(rawPattern)
-		if pattern == "" || strings.HasPrefix(pattern, "#") || strings.HasPrefix(pattern, "!") {
-			continue
-		}
-
-		pattern = filepath.ToSlash(pattern)
-		pattern = strings.TrimSuffix(pattern, "/")
-		pattern = strings.TrimPrefix(pattern, "./")
-
-		anchored := strings.HasPrefix(pattern, "/")
-		pattern = strings.TrimPrefix(pattern, "/")
-		if pattern == "" {
-			continue
-		}
-
-		if name == pattern {
-			return true
-		}
-
-		if strings.ContainsAny(pattern, "*?[]") {
-			if matched, _ := path.Match(pattern, name); matched {
-				return true
-			}
-			if matched, _ := path.Match(pattern, relPath); matched {
-				return true
-			}
-			if !anchored {
-				for i := 0; i < len(segments); i++ {
-					candidate := strings.Join(segments[i:], "/")
-					if matched, _ := path.Match(pattern, candidate); matched {
-						return true
-					}
-				}
-			}
-			continue
-		}
-
-		if strings.Contains(pattern, "/") {
-			if relPath == pattern || strings.HasPrefix(relPath, pattern+"/") {
-				return true
-			}
-			if !anchored {
-				if strings.Contains(relPath, "/"+pattern+"/") || strings.HasSuffix(relPath, "/"+pattern) {
-					return true
-				}
-			}
-			continue
-		}
-
-		for _, segment := range segments {
-			if segment == pattern {
-				return true
-			}
-		}
+func extensionsForWalk(opts *WalkOptions) map[string]bool {
+	if opts == nil || opts.Extensions == nil {
+		return defaultExtensions
 	}
-	return false
+	return opts.Extensions
 }
 
-func loadGitignore(root string) []string {
-	path := filepath.Join(root, ".gitignore")
-	f, err := os.Open(path)
-	if err != nil {
+func extraIgnorePatterns(opts *WalkOptions) []string {
+	if opts == nil || len(opts.ExtraIgnore) == 0 {
 		return nil
 	}
-	defer f.Close()
+	return append([]string(nil), opts.ExtraIgnore...)
+}
 
-	var patterns []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Strip trailing slash for directory patterns
-		line = strings.TrimSuffix(line, "/")
-		if line != "" {
-			patterns = append(patterns, line)
-		}
+func maxFileSizeBytes(opts *WalkOptions) int64 {
+	if opts == nil || opts.MaxFileSizeKB <= 0 {
+		return 0
 	}
-	return patterns
+	return int64(opts.MaxFileSizeKB) * 1024
 }

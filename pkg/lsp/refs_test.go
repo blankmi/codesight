@@ -149,6 +149,87 @@ func TestRefsLSPHappyPath(t *testing.T) {
 	}
 }
 
+func TestRefsLSPRespectsCsignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".csignore"), []byte("ignored.go\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+
+	target := filepath.Join(root, "target.go")
+	ignored := filepath.Join(root, "ignored.go")
+	use := filepath.Join(root, "use.go")
+
+	writeTestFile(t, target, strings.Join([]string{
+		"package demo",
+		"",
+		"func Target() {}",
+	}, "\n"))
+	writeTestFile(t, ignored, strings.Join([]string{
+		"package demo",
+		"",
+		"func Target() {}",
+		"",
+		"func ignoredUse() {",
+		"\tTarget()",
+		"}",
+	}, "\n"))
+	writeTestFile(t, use, strings.Join([]string{
+		"package demo",
+		"",
+		"func useTarget() {",
+		"\tTarget()",
+		"}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "Target",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI:   fileURI(ignored),
+					Range: Range{Start: Position{Line: 2, Character: 5}},
+				},
+			},
+			{
+				Name: "Target",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI:   fileURI(target),
+					Range: Range{Start: Position{Line: 2, Character: 5}},
+				},
+			},
+		},
+		references: []Location{
+			{
+				URI:   fileURI(ignored),
+				Range: Range{Start: Position{Line: 5, Character: 1}},
+			},
+			{
+				URI:   fileURI(use),
+				Range: Range{Start: Position{Line: 3, Character: 1}},
+			},
+		},
+	}
+
+	engine := NewRefsEngine(client, nil)
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Target",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"use.go:4  ->  Target()",
+		"1 references found",
+	}, "\n")
+	if output != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)
+	}
+}
+
 func TestRefsAmbiguousSymbolDeterministicOrdering(t *testing.T) {
 	root := t.TempDir()
 
@@ -359,6 +440,51 @@ func TestRefsFallbackToGrepIncludesPrecisionNote(t *testing.T) {
 		"alpha.go:5  ->  _ = target()",
 		"zeta.go:4  ->  _ = target()",
 		"3 references found",
+	}, "\n")
+	if output != want {
+		t.Fatalf("fallback output mismatch\n got: %q\nwant: %q", output, want)
+	}
+}
+
+func TestRefsFallbackRespectsCsignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".csignore"), []byte("ignored.go\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+
+	writeTestFile(t, filepath.Join(root, "ignored.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func ignoredUse() {",
+		"\t_ = target()",
+		"}",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(root, "visible.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func visibleUse() {",
+		"\t_ = target()",
+		"}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbolErr: errors.New("lsp unavailable"),
+	}
+	engine := NewRefsEngine(client, nil)
+
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "target",
+		FallbackLSP:   "gopls",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"(grep-based - install gopls for precise results)",
+		"visible.go:4  ->  _ = target()",
+		"1 references found",
 	}, "\n")
 	if output != want {
 		t.Fatalf("fallback output mismatch\n got: %q\nwant: %q", output, want)

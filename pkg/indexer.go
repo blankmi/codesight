@@ -40,6 +40,11 @@ func (idx *Indexer) Index(ctx context.Context, opts IndexOptions) error {
 	}
 
 	collection := CollectionName(projectPath)
+	matcher, err := matcherForWalk(projectPath, opts.Walk)
+	if err != nil {
+		return fmt.Errorf("loading ignore rules: %w", err)
+	}
+	ignoreFingerprint := matcher.Fingerprint()
 
 	if !opts.Force {
 		exists, err := idx.Store.CollectionExists(ctx, collection)
@@ -51,7 +56,7 @@ func (idx *Indexer) Index(ctx context.Context, opts IndexOptions) error {
 			if err != nil {
 				return fmt.Errorf("getting metadata: %w", err)
 			}
-			if meta != nil && !IsStale(meta, opts.CommitSHA) {
+			if meta != nil && !IsStale(meta, opts.CommitSHA, ignoreFingerprint) {
 				idx.Logger.Info("index is up to date, skipping", "collection", collection, "commit", opts.CommitSHA)
 				return nil
 			}
@@ -92,7 +97,7 @@ func (idx *Indexer) Index(ctx context.Context, opts IndexOptions) error {
 	}
 
 	// Walk files
-	files, err := WalkFiles(projectPath, opts.Walk)
+	files, err := walkFiles(projectPath, opts.Walk, matcher)
 	if err != nil {
 		return fmt.Errorf("walking files: %w", err)
 	}
@@ -174,11 +179,12 @@ func (idx *Indexer) Index(ctx context.Context, opts IndexOptions) error {
 
 	// Save metadata
 	meta := vectorstore.IndexMetadata{
-		Branch:     opts.Branch,
-		CommitSHA:  opts.CommitSHA,
-		IndexedAt:  time.Now(),
-		FileCount:  len(files),
-		ChunkCount: len(allChunks),
+		Branch:            opts.Branch,
+		CommitSHA:         opts.CommitSHA,
+		IgnoreFingerprint: ignoreFingerprint,
+		IndexedAt:         time.Now(),
+		FileCount:         len(files),
+		ChunkCount:        len(allChunks),
 	}
 	if err := idx.Store.SetMetadata(ctx, collection, meta); err != nil {
 		return fmt.Errorf("saving metadata: %w", err)

@@ -64,13 +64,17 @@ func (e *CallersEngine) Find(ctx context.Context, opts CallersOptions) (string, 
 	if e.client == nil {
 		return "", formatMissingCallersLSPError(opts.LSPBinary, opts.LSPInstall)
 	}
+	matcher, err := newWorkspaceIgnoreMatcher(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
 
 	symbols, err := e.lookupSymbols(ctx, symbol)
 	if err != nil {
 		return "", fmt.Errorf("workspace/symbol request failed: %w", err)
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, symbol, "")
+	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, "")
 	if err != nil {
 		return "", err
 	}
@@ -101,7 +105,7 @@ func (e *CallersEngine) Find(ctx context.Context, opts CallersOptions) (string, 
 		return formatCallersOutput(rootLine, nil, 0, opts.Depth), nil
 	}
 
-	rootNode, err := hierarchyNodeForItem(workspaceRoot, rootItem)
+	rootNode, err := hierarchyNodeForItem(workspaceRoot, matcher, rootItem)
 	if err != nil {
 		return "", err
 	}
@@ -116,6 +120,7 @@ func (e *CallersEngine) Find(ctx context.Context, opts CallersOptions) (string, 
 	callersCount, err := e.walkIncoming(
 		ctx,
 		workspaceRoot,
+		matcher,
 		rootItem,
 		opts.Depth,
 		1,
@@ -199,6 +204,7 @@ func (e *CallersEngine) lookupIncomingCalls(
 func (e *CallersEngine) walkIncoming(
 	ctx context.Context,
 	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
 	item CallHierarchyItem,
 	maxDepth int,
 	depth int,
@@ -215,7 +221,7 @@ func (e *CallersEngine) walkIncoming(
 		return 0, fmt.Errorf("callHierarchy/incomingCalls request failed: %w", err)
 	}
 
-	nodes, err := incomingNodes(workspaceRoot, incoming)
+	nodes, err := incomingNodes(workspaceRoot, matcher, incoming)
 	if err != nil {
 		return 0, err
 	}
@@ -253,6 +259,7 @@ func (e *CallersEngine) walkIncoming(
 		childCount, err := e.walkIncoming(
 			ctx,
 			workspaceRoot,
+			matcher,
 			node.item,
 			maxDepth,
 			depth+1,
@@ -273,15 +280,19 @@ func (e *CallersEngine) walkIncoming(
 
 func incomingNodes(
 	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
 	incoming []CallHierarchyIncomingCall,
 ) ([]hierarchyNode, error) {
 	nodes := make([]hierarchyNode, 0, len(incoming))
 	seen := make(map[string]struct{}, len(incoming))
 
 	for _, call := range incoming {
-		node, err := hierarchyNodeForItem(workspaceRoot, call.From)
+		node, err := hierarchyNodeForItem(workspaceRoot, matcher, call.From)
 		if err != nil {
 			return nil, err
+		}
+		if node.identity == "" {
+			continue
 		}
 		if _, ok := seen[node.identity]; ok {
 			continue
@@ -306,10 +317,17 @@ func incomingNodes(
 	return nodes, nil
 }
 
-func hierarchyNodeForItem(workspaceRoot string, item CallHierarchyItem) (hierarchyNode, error) {
+func hierarchyNodeForItem(
+	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
+	item CallHierarchyItem,
+) (hierarchyNode, error) {
 	path, err := documentURIToPath(item.URI)
 	if err != nil {
 		return hierarchyNode{}, err
+	}
+	if matcher != nil && matcher.MatchesPath(path) {
+		return hierarchyNode{}, nil
 	}
 
 	line, character := callHierarchyPosition(item)

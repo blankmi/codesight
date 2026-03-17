@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -183,6 +184,50 @@ func TestCallersDepthOneFormatting(t *testing.T) {
 	}
 	if !slices.Equal(client.methods, wantMethods) {
 		t.Fatalf("method order = %v, want %v", client.methods, wantMethods)
+	}
+}
+
+func TestCallersRespectsCsignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".csignore"), []byte("ignored.go\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+
+	targetPath := filepath.Join(root, "target.go")
+	alphaPath := filepath.Join(root, "alpha.go")
+	ignoredPath := filepath.Join(root, "ignored.go")
+
+	rootItem := callersHierarchyItem(targetPath, "Target", 9)
+	client := &stubCallersClient{
+		workspaceSymbols: []SymbolInformation{
+			callersSymbol(targetPath, "Target", 9),
+		},
+		prepareItems: []CallHierarchyItem{rootItem},
+		incomingByItem: map[string][]CallHierarchyIncomingCall{
+			stubCallHierarchyKey(rootItem): {
+				callersIncomingCall(ignoredPath, "ignoredCaller", 20),
+				callersIncomingCall(alphaPath, "alphaCaller", 12),
+			},
+		},
+	}
+
+	engine := NewCallersEngine(client)
+	output, err := engine.Find(context.Background(), CallersOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Target",
+		Depth:         1,
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"Target (target.go:10)",
+		"  <- alphaCaller (alpha.go:13)",
+		"1 callers (depth 1)",
+	}, "\n")
+	if output != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)
 	}
 }
 

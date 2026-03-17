@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -120,6 +121,44 @@ func TestImplementsLSPHappyPath(t *testing.T) {
 	}
 	if !slices.Equal(client.methods, wantMethods) {
 		t.Fatalf("method order = %v, want %v", client.methods, wantMethods)
+	}
+}
+
+func TestImplementsRespectsCsignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".csignore"), []byte("ignored.go\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.csignore) returned error: %v", err)
+	}
+
+	target := implementsTypeHierarchyItem("Target", filepath.Join(root, "target.go"), 2)
+	client := &stubImplementsClient{
+		workspaceSymbols: []SymbolInformation{
+			implementsSymbol("Target", filepath.Join(root, "target.go"), 2),
+		},
+		prepareItems: []typeHierarchyItem{target},
+		subtypesByItem: map[string][]typeHierarchyItem{
+			stubTypeHierarchyKey(target): {
+				implementsTypeHierarchyItem("IgnoredImpl", filepath.Join(root, "ignored.go"), 11),
+				implementsTypeHierarchyItem("VisibleImpl", filepath.Join(root, "visible.go"), 5),
+			},
+		},
+	}
+
+	engine := NewImplementsEngine(client)
+	output, err := engine.Find(context.Background(), ImplementsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Target",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"VisibleImpl (visible.go)",
+		"1 implementations",
+	}, "\n")
+	if output != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)
 	}
 }
 
