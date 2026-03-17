@@ -2,10 +2,22 @@
 
 Unified code intelligence CLI for large codebases. `cs` combines semantic discovery (`search`), surgical symbol extraction (`extract`), and LSP-powered navigation (`refs`, `callers`, `implements`) while preserving existing index lifecycle workflows (`index`, `status`, `clear`).
 
-> **Benchmark note:** A/B testing (88 agent invocations, codebases up to 250K LOC, Sonnet 4.6) showed `cs search` saves **14.5% tokens on conceptual queries** by surfacing relevant files from the semantic index instead of agents reading 30+ files blind. 
-> Grep already handles lexical search optimally. `cs search` fills the conceptual gap Grep can't: "how does X work?" across a large codebase. Shorter instructions (7 lines) outperformed verbose ones (29 lines) by 15 percentage points.
+> **Benchmark results (Opus 4.6, 250K LOC Java codebase, 24 agent invocations):**
+> - Conceptual queries ("how does auth work?"): **51% faster, 25% cheaper, 69% fewer tool calls** vs no instructions
+> - `cs search` + `cs extract` replaces blind 56-call Agent exploration with targeted 17-call workflows
+> - `cs extract` reduces file-reading from 22-32 `Read` calls (entire files) to 7-8 targeted symbol extractions (**75% fewer**)
+> - Lexical/reference/symbol queries: Grep is already optimal — instructions neither help nor hurt
+> - Total across all query types: **22% cost reduction, 40% faster**
+>
+> Grep handles exact lookups. `cs search` fills the conceptual gap: "how does X work?" across a large codebase. `cs extract` provides surgical symbol reads without loading entire files. `cs refs`/`callers`/`implements` add LSP-powered cross-file navigation.
 
 ## How it works
+
+`cs` has three independent subsystems — each can be used standalone:
+
+### Semantic search (`cs index`, `cs search`, `cs status`, `cs clear`)
+
+Requires Ollama + Milvus.
 
 1. **Walk** — traverses the repo respecting `.gitignore` and `.csignore`
 2. **Split** — extracts functions, classes, methods, and types using tree-sitter AST parsing (falls back to line-based chunking for unsupported languages)
@@ -13,18 +25,41 @@ Unified code intelligence CLI for large codebases. `cs` combines semantic discov
 4. **Store** — inserts chunks + vectors into Milvus
 5. **Search** — embeds a natural-language query and returns the most relevant code chunks
 
+### Symbol extraction (`cs extract`)
+
+No external dependencies. Uses tree-sitter AST parsing to extract a named symbol (function, class, method, type) from a file or directory. Supports 9 languages.
+
+In benchmarks, agents with `cs extract` replaced 22-32 `Read` calls (which load entire files) with 7-8 targeted `cs extract` calls that return only the requested symbol. On a 250K LOC codebase, this reduced file-reading tool calls by **75%** during conceptual queries.
+
+### LSP navigation (`cs refs`, `cs callers`, `cs implements`)
+
+Requires a language server binary (e.g. `gopls`, `jdtls`, `pylsp`). Manages LSP server lifecycles as child processes over stdio. `cs refs` falls back to grep when the LSP is unavailable; `cs callers` and `cs implements` fail fast with install guidance.
+
+These commands replace the manual grep→read→grep exploration loops agents use to trace cross-file dependencies. Not yet measured in benchmarks, but available in the toolset and included in the agent instructions.
+
 ## Supported languages
 
-AST-aware chunking: **Go, TypeScript, JavaScript, Python, Java, Rust, C, C++**
+| Feature | Languages |
+|---|---|
+| AST-aware chunking (index/search) | Go, TypeScript, JavaScript, Python, Java, Rust, C, C++ |
+| Symbol extraction (extract) | Go, TypeScript, JavaScript, Python, Java, Rust, C++, XML, HTML |
+| LSP navigation (refs/callers/implements) | Go (`gopls`), Python (`pylsp`), Java (`jdtls`), TypeScript/JavaScript (`typescript-language-server`), Rust (`rust-analyzer`), C/C++ (`clangd`) |
 
-All other languages get line-based chunking with overlap.
+All other languages get line-based chunking with overlap for indexing.
 
 ## Quick start
 
 ### Prerequisites
 
+`cs extract` works out of the box — no external dependencies.
+
+For semantic search (`cs index`, `cs search`):
 - [Ollama](https://ollama.com) running locally with an embedding model
 - [Milvus](https://milvus.io) (standalone Docker container)
+
+For LSP navigation (`cs refs`, `cs callers`, `cs implements`):
+- A language server for your language (e.g. `gopls`, `jdtls`, `pylsp`)
+- `cs refs` falls back to grep if no LSP is available
 
 ```bash
 # Start Milvus
@@ -211,19 +246,32 @@ Without a mounted state directory, each container starts cold but command contra
 
 ```
 pkg/
-├── vectorstore/
-│   ├── store.go          # Store interface
-│   └── milvus.go         # Milvus implementation
-├── embedding/
-│   ├── embedding.go      # Provider interface
-│   └── ollama.go         # Ollama HTTP client
-├── splitter/
-│   ├── splitter.go       # Splitter interface + Chunk type
-│   ├── treesitter.go     # AST-aware splitter
-│   └── fallback.go       # Line-based fallback
+├── vectorstore/          # Semantic search: vector storage
+│   ├── store.go          #   Store interface
+│   └── milvus.go         #   Milvus implementation
+├── embedding/            # Semantic search: embeddings
+│   ├── embedding.go      #   Provider interface
+│   └── ollama.go         #   Ollama HTTP client
+├── splitter/             # Semantic search: code chunking
+│   ├── splitter.go       #   Splitter interface + Chunk type
+│   ├── treesitter.go     #   AST-aware splitter
+│   └── fallback.go       #   Line-based fallback
+├── extract/              # Symbol extraction (cs extract)
+│   ├── extract.go        #   Tree-sitter AST symbol resolver
+│   ├── languages.go      #   Language detection + parser registry
+│   └── types.go          #   SymbolMatch output type
+├── lsp/                  # LSP navigation (cs refs/callers/implements)
+│   ├── client.go         #   JSON-RPC stdio client
+│   ├── lifecycle.go      #   Per-workspace LSP daemon management
+│   ├── registry.go       #   Language → LSP binary mapping
+│   ├── refs.go           #   Find references engine + grep fallback
+│   ├── callers.go        #   Incoming call hierarchy engine
+│   └── implements.go     #   Type hierarchy / subtypes engine
+├── ignore/               # .gitignore + .csignore rule engine
+│   └── matcher.go        #   Unified ignore pattern matcher
 ├── indexer.go            # Indexing pipeline
 ├── searcher.go           # Search pipeline
-├── version.go            # Index versioning + staleness
+├── version.go            # Index versioning + staleness (commit + ignore fingerprint)
 └── walker.go             # .gitignore/.csignore-aware file walker
 ```
 
@@ -238,72 +286,38 @@ Packages are under `pkg/` (not `internal/`) so other tools can import codesight 
 
 ## Agent Integration
 
-Pre-built skill files for popular coding agents are in `agent-skills/`:
+Agent tool selection is driven by **project-level instruction files**, not skills. Benchmark data confirms that instructions in these files are loaded into the agent's context automatically and directly influence which tools the agent picks. Skills are optional supplementary reference but are not required.
 
-| Agent       | File                                   | How to install                                                                                          |
-|-------------|----------------------------------------|---------------------------------------------------------------------------------------------------------|
-| Claude Code | `agent-skills/claude-code/cs/SKILL.md` | Copy `agent-skills/claude-code/cs` into `.claude/skills/cs` (project) or `~/.claude/skills/cs` (global) |
-| Gemini      | `agent-skills/gemini/gemini.skill`     | `gemini skills install agent-skills/gemini/gemini.skill --scope workspace`                              |
-| Codex       | `agent-skills/codex/cs/SKILL.md`       | Copy `agent-skills/codex/cs` into `$CODEX_HOME/skills/cs`                                               |
+### Step 1: Add project instructions
 
-> [!IMPORTANT]
-> Install these skills per-project so agents use the correct workspace context. Semantic search commands (`cs search`) require project indexing; extraction/navigation commands do not.
+Add the following to your project's instruction file. This is the primary mechanism that makes agents use `cs`.
 
-### Making agents follow the v2 tool policy
-
-Installing the skill alone is not enough. Agents can still default to built-in tools (grep, glob, broad file reads) unless you also add explicit project instructions.
-
-To make an agent follow the v2 command policy, add the following to the agent's **project-level** config file:
-
-| Agent       | Config file                          |
-|-------------|--------------------------------------|
-| Claude Code | `CLAUDE.md`                          |
-| Gemini      | `GEMINI.md`                          |
-| Codex       | `AGENTS.md` or `AGENTS.override.md`  |
+| Agent | Instruction file | Loaded automatically |
+|---|---|---|
+| Claude Code | `CLAUDE.md` | Yes — loaded into context on every turn |
+| Gemini CLI | `GEMINI.md` | Yes — loaded hierarchically from workspace dirs |
+| Codex | `AGENTS.md` | Yes — loaded from project root to cwd on each run |
 
 ```markdown
-Use `cs search "<query>"` via Bash for conceptual questions when you don't know which files matter.
-Use Grep for exact text, identifiers, patterns, and class names.
-Use `cs extract -f <file-or-dir> -s <symbol>` for symbol extraction in this repository.
-Use `cs refs <symbol>` for cross-file references (`--kind`: function|method|class|interface|type|constant).
-Use `cs callers <symbol>` for incoming call hierarchy.
-Use `cs implements <symbol>` for type/interface implementation lookup.
-Do not use remote/TCP LSP mode; `cs` runs local child LSP servers over stdio.
+# Tool Selection
+
+- **Search** → `Grep`. Always start here for text, identifiers, patterns, class names.
+- **Understand** → `cs search "<query>"` via Bash. Use for conceptual questions when you don't know which files matter.
+- **Extract** → `cs extract -f <file> -s <symbol>` via Bash. Use instead of Read when you need one symbol from a file >200 lines.
+- **References** → `cs refs <symbol> --path <dir>` via Bash. Find all references to a symbol across files.
+- **Call hierarchy** → `cs callers <symbol> --path <dir>` via Bash. Trace who calls a function.
+- **Implementations** → `cs implements <symbol> --path <dir>` via Bash. Find implementations of an interface/type.
+- **Find files** → `Glob`.
+
+Do NOT use cs search for exact-match lookups. Do NOT read 5+ files to understand a feature — cs search ranks them for you.
 ```
+
 > [!IMPORTANT]
-> Add this instruction to the **project-level** config file if you want it to apply automatically. `cs` depends on per-project context (index + workspace path), so enabling it globally can trigger commands in unrelated repos.
+> Add instructions at the **project level**, not globally. `cs` depends on per-project context (index + workspace path), so enabling it globally can trigger commands in unrelated repos.
 
-> [!NOTE]
-> Skills and referenced files are passive — agents may not follow them reliably. Instructions placed directly in the agent's config file are loaded into the agent's context automatically and have the strongest influence on tool selection behavior.
+### Step 2: Allow `cs` commands without prompting
 
-#### Quick verification
-
-Ask the agent something like:
-- `Where is authentication handled?`
-- `Extract NormalizeRefKind from pkg/lsp/refs.go.`
-- `Find refs for NormalizeRefKind.`
-- `Who calls runSearch at depth 2?`
-
-A correct run should route by intent: conceptual queries start with `cs search`, extraction uses `cs extract`, and symbol navigation uses `cs refs`/`cs callers`. If it starts with broad grep/file reads for those intents, the instruction is missing or too weak.
-
-### Migration note: `symgrep extract` to `cs extract`
-
-Earlier guidance used standalone `symgrep extract` for symbol reads. In v2 for this repository, prefer `cs extract`.
-
-Each tool stays in its lane:
-
-| Action | Tool | Why |
-|---|---|---|
-| Search for text/identifiers | Grep | Models already use Grep efficiently — no instruction needed |
-| Understand a feature/flow | `cs search` | Embedding-based ranking finds relevant files without reading everything |
-| Read one symbol from a file or directory | `cs extract` | Built-in extraction contract (`raw`/`json`) with deterministic directory traversal |
-| Find references for a symbol | `cs refs` | LSP-first precision with grep fallback note when LSP is unavailable |
-| Trace incoming call hierarchy | `cs callers` | LSP call hierarchy with explicit depth control |
-| List type/interface implementations | `cs implements` | LSP type hierarchy lookup (stretch command delivered in this repository) |
-
-### Allowlisting `cs` for autonomous use
-
-By default, coding agents require user approval before running shell commands. To let an agent use `cs` without prompting each time, add it to the agent's permission allowlist.
+Agents require user approval before running shell commands by default. Without explicit permission, `cs` commands are blocked at runtime even if the instructions tell the agent to use them — the agent falls back to Grep+Read silently. Benchmarks confirmed this: instructions alone produced 20.5 tool calls per conceptual query, but adding the permission allowlist dropped it to 17.3.
 
 **Claude Code** — add to `.claude/settings.json` (project-level) or `~/.claude/settings.json` (global):
 
@@ -317,41 +331,57 @@ By default, coding agents require user approval before running shell commands. T
 }
 ```
 
-See the [Claude Code permissions docs](https://docs.anthropic.com/en/docs/claude-code/settings#permissions) for more details on permission rules and scoping.
-
-**Codex** — add to `~/.codex/rules/default.rules` (or project-level `.codex/rules/*.rules`):
+**Codex** — add a [prefix rule](https://developers.openai.com/codex/rules/) to project-level `.codex/rules/*.rules` or `~/.codex/rules/default.rules`:
 
 ```python
-# Allow direct cs invocations outside the sandbox without approval prompts.
 prefix_rule(
     pattern = ["cs"],
     decision = "allow",
 )
 ```
 
-See the [Codex rules docs](https://developers.openai.com/codex/rules) for rule syntax and scope details.
+> [!NOTE]
+> Codex restricts outbound network access by default. Commands that talk to Milvus/Ollama (`cs index`, `cs search`, `cs status`, `cs clear`) will fail until the agent requests a network escalation. The error message is designed for the agent to recognize and escalate automatically.
 
-> [!IMPORTANT]
-> **Network Escalation:** Codex restricts outbound network access by default. Since `cs` needs to talk to Milvus and Ollama, it will initially fail with a timeout error:
-> `connecting to the vector store timed out after 1s; network access may be blocked in this sandbox...`
->
-> This error is specifically designed to be recognized by the agent, which will then request a **network escalation**. Once you approve the escalation, the agent will have the necessary access to perform searches. See the [Codex security docs](https://developers.openai.com/codex/agent-approvals-security/#network-access) for more details.
-
-**Gemini CLI** — add to `.gemini/policies/cs.toml` (project-level) or `~/.gemini/policies/cs.toml` (global):
+**Gemini CLI** — add a [policy rule](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/policy-engine.md) to `.gemini/policies/cs.toml` (project-level) or `~/.gemini/policies/cs.toml` (global):
 
 ```toml
-# Allow skill activation without confirmation
-[[rule]]
-toolName = "activate_skill"
-decision = "allow"
-priority = 100
-
-# Allow cs command execution without confirmation
 [[rule]]
 toolName = "run_shell_command"
 commandPrefix = "cs"
 decision = "allow"
 priority = 100
 ```
+
+### Step 3 (optional): Install skill files
+
+Pre-built skill files provide extended reference documentation for each agent. These are **not required** for tool routing — the project instructions from Step 1 are sufficient. Skills may help agents with flag details and edge cases.
+
+| Agent | Skill file | Install |
+|---|---|---|
+| Claude Code | `agent-skills/claude-code/cs/SKILL.md` | Copy into `.claude/skills/cs` (project) or `~/.claude/skills/cs` (global) |
+| Gemini CLI | `agent-skills/gemini/cs/SKILL.md` | Copy into `.gemini/skills/cs` (project) or `~/.gemini/skills/cs` (global) |
+| Codex | `agent-skills/codex/cs/SKILL.md` | Reference from `AGENTS.md` or place alongside project instructions |
+
+### Verification
+
+Ask the agent:
+- `Where is authentication handled?` — should start with `cs search`, not broad file reads
+- `Extract SecurityConfig from SecurityConfig.java` — should use `cs extract`
+- `Who calls processPayment?` — should use `cs refs` or `cs callers`
+
+If it starts with broad grep/file reads for conceptual queries, check that both the instruction file (Step 1) and the permission allowlist (Step 2) are in place.
+
+### Tool routing summary
+
+| Action | Tool | Why |
+|---|---|---|
+| Search for text/identifiers | Grep | Models already use Grep efficiently — no instruction needed |
+| Understand a feature/flow | `cs search` | Embedding-based ranking finds relevant files without reading everything |
+| Read one symbol from a large file | `cs extract` | AST-based extraction (`raw`/`json`) with deterministic directory traversal |
+| Find references for a symbol | `cs refs` | LSP-first precision with grep fallback when LSP is unavailable |
+| Trace incoming call hierarchy | `cs callers` | LSP call hierarchy with explicit depth control |
+| List type/interface implementations | `cs implements` | LSP type hierarchy lookup |
+
 ## License
 MIT
