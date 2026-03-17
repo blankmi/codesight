@@ -1,32 +1,56 @@
 ---
 name: cs
-description: Semantic code search using CodeSight (`cs`). Use when you need to search for code by meaning, find relevant functions or classes, or understand how specific features are implemented in a large codebase.
+description: Unified CodeSight workflow for semantic discovery, symbol extraction, and LSP symbol navigation with the `cs` CLI.
 ---
 
-# CodeSight (`cs`)
+# CodeSight (`cs`) v2
 
-CodeSight provides semantic code search for large repositories by indexing source code using AST-aware chunking and vector embeddings.
+CodeSight provides unified code intelligence for large repositories: semantic search, AST-based symbol extraction, and LSP-powered cross-file navigation.
 
 ## Core Commands
 
-- `cs index <path>`: Index the codebase. Automatically re-indexes if the index is stale (checks HEAD commit).
-- `cs search "<query>"`: Perform a natural language search over the indexed code.
+- `cs index <path>`: Index the codebase. Automatically re-indexes if stale (checks HEAD commit and ignore rules).
+- `cs search "<query>" --path <dir>`: Semantic natural language search over indexed code.
+- `cs extract -f <file-or-dir> -s <symbol>`: Extract a named symbol using tree-sitter AST parsing.
+- `cs refs <symbol> --path <dir>`: Find all references to a symbol (falls back to grep if LSP unavailable).
+- `cs callers <symbol> --path <dir>`: Trace incoming call hierarchy.
+- `cs implements <symbol> --path <dir>`: Find implementations of an interface or type.
 - `cs status <path>`: Check if the index is up-to-date or stale.
 - `cs clear <path>`: Remove the index for a repository.
 
-## Search Options
+## Use by Intent
 
-- `--ext <extension>`: Filter search results by file extension (e.g., `--ext .go`).
-- `--limit <number>`: Limit the number of search results (default is usually 10).
+- Exact lexical lookup → Grep (not cs search)
+- Conceptual discovery → `cs search`
+- Symbol extraction → `cs extract`
+- Cross-file symbol navigation → `cs refs`, `cs callers`, `cs implements`
 
-## Effective Search Patterns
+## Key Flags
+
+- `--path <dir>` — scope to a directory
+- `--ext .go,.ts` — filter semantic search results by file extension
+- `--limit N` — control number of semantic search results
+- `cs extract --format` supports `raw` (default) and `json`
+- `cs refs --kind` values: `function|method|class|interface|type|constant`
+- `cs callers --depth` default is `1`, must be positive
+
+## Search Patterns
 
 Use natural language queries to find logic without knowing exact symbol names:
 - `cs search "authentication middleware logic"`
 - `cs search "database connection pool configuration" --ext .go`
 - `cs search "error handling in the walker package"`
 
-## Troubleshooting
+## Runtime Notes
 
-- **Stale Index**: If results seem outdated, run `cs status .`. If it reports stale, run `cs index .`.
-- **Backend**: Ensure Ollama and Milvus are running as described in the project documentation.
+- `cs refs`, `cs callers`, and `cs implements` run LSP servers as child processes over stdio.
+- `cs refs` falls back to grep with a precision note when LSP is unavailable.
+- `cs callers` and `cs implements` fail fast with install guidance when LSP binaries are missing.
+- Ensure Ollama and Milvus are running for `index`, `search`, `status`, and `clear` commands.
+
+## Guardrails
+
+- Always confirm `cs` results by reading source before final claims.
+- Keep Grep as the first choice for exact text lookups.
+- Do not read 5+ files to understand a feature — `cs search` ranks them for you.
+- Re-index when stale status is reported.

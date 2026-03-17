@@ -63,8 +63,12 @@ func TestRefsCommandPassesThroughOutputAndNormalizedInputs(t *testing.T) {
 	if got.Kind != "method" {
 		t.Fatalf("kind = %q, want %q", got.Kind, "method")
 	}
-	if got.WorkspaceRoot != tempDir {
-		t.Fatalf("workspace root = %q, want %q", got.WorkspaceRoot, tempDir)
+	wantRoot := tempDir
+	if resolved, err := filepath.EvalSymlinks(tempDir); err == nil {
+		wantRoot = resolved
+	}
+	if got.WorkspaceRoot != wantRoot {
+		t.Fatalf("workspace root = %q, want %q", got.WorkspaceRoot, wantRoot)
 	}
 }
 

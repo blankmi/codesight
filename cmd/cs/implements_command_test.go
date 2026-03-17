@@ -51,8 +51,12 @@ func TestImplementsCommandPassesThroughOutputAndParsedInputs(t *testing.T) {
 	if got.Symbol != "Target" {
 		t.Fatalf("symbol = %q, want %q", got.Symbol, "Target")
 	}
-	if got.WorkspaceRoot != workspace {
-		t.Fatalf("workspace root = %q, want %q", got.WorkspaceRoot, workspace)
+	wantRoot := workspace
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		wantRoot = resolved
+	}
+	if got.WorkspaceRoot != wantRoot {
+		t.Fatalf("workspace root = %q, want %q", got.WorkspaceRoot, wantRoot)
 	}
 }
 

@@ -295,7 +295,15 @@ func capMaxInputChars(base, cap int) int {
 }
 
 func resolveProjectPath(path string) (string, error) {
-	return filepath.Abs(path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return abs, nil // fall back to abs if symlink resolution fails
+	}
+	return resolved, nil
 }
 
 func detectGitCommit(path string) (string, error) {
@@ -318,6 +326,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	path := "."
 	if len(args) > 0 {
 		path = args[0]
+	}
+	if resolved, err := resolveProjectPath(path); err == nil {
+		path = resolved
 	}
 
 	logger := newLogger()
@@ -421,6 +432,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	searchPath := flagPath
+	if resolved, err := resolveProjectPath(searchPath); err == nil {
+		searchPath = resolved
+	}
+
 	searcher := &pkg.Searcher{
 		Store:    store,
 		Embedder: newEmbedder(),
@@ -431,7 +447,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if err := runWithTimeout(interactiveNetworkTimeout, "running search", func(ctx context.Context) error {
 		var err error
 		output, err = searcher.Search(ctx, pkg.SearchOptions{
-			Path:       flagPath,
+			Path:       searchPath,
 			Query:      query,
 			Limit:      flagLimit,
 			Extensions: extensions,
@@ -457,6 +473,10 @@ func runExtract(cmd *cobra.Command, args []string) error {
 	format, err := cmd.Flags().GetString("format")
 	if err != nil {
 		return err
+	}
+
+	if resolved, err := resolveProjectPath(targetPath); err == nil {
+		targetPath = resolved
 	}
 
 	output, err := extractpkg.Extract(targetPath, symbol, format)
