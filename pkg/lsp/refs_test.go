@@ -1,0 +1,388 @@
+package lsp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+type stubRefsClient struct {
+	workspaceSymbols    []SymbolInformation
+	workspaceSymbolErr  error
+	references          []Location
+	referencesErr       error
+	methods             []string
+	lastReferenceParams ReferenceParams
+}
+
+func (s *stubRefsClient) Call(ctx context.Context, method string, params any, result any) error {
+	s.methods = append(s.methods, method)
+
+	switch method {
+	case MethodWorkspaceSymbol:
+		if s.workspaceSymbolErr != nil {
+			return s.workspaceSymbolErr
+		}
+
+		out, ok := result.(*[]SymbolInformation)
+		if !ok {
+			return fmt.Errorf("workspace/symbol result type %T", result)
+		}
+		*out = append([]SymbolInformation(nil), s.workspaceSymbols...)
+		return nil
+
+	case MethodTextDocumentReferences:
+		if s.referencesErr != nil {
+			return s.referencesErr
+		}
+
+		typedParams, ok := params.(ReferenceParams)
+		if !ok {
+			return fmt.Errorf("references params type %T", params)
+		}
+		s.lastReferenceParams = typedParams
+
+		out, ok := result.(*[]Location)
+		if !ok {
+			return fmt.Errorf("references result type %T", result)
+		}
+		*out = append([]Location(nil), s.references...)
+		return nil
+
+	default:
+		return fmt.Errorf("unexpected method %q", method)
+	}
+}
+
+type stubFallback struct {
+	called bool
+}
+
+func (s *stubFallback) Find(ctx context.Context, workspaceRoot string, symbol string) ([]referenceLine, error) {
+	s.called = true
+	return nil, nil
+}
+
+func TestRefsLSPHappyPath(t *testing.T) {
+	root := t.TempDir()
+	alpha := filepath.Join(root, "alpha.go")
+	bravo := filepath.Join(root, "bravo.go")
+
+	writeTestFile(t, alpha, strings.Join([]string{
+		"package demo",
+		"",
+		"func target() {}",
+		"",
+		"func useAlpha() {",
+		"\t_ = target()",
+		"}",
+	}, "\n"))
+	writeTestFile(t, bravo, strings.Join([]string{
+		"package demo",
+		"",
+		"func useBravo() {",
+		"\t_ = target()",
+		"}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "target",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI: fileURI(alpha),
+					Range: Range{
+						Start: Position{Line: 2, Character: 5},
+						End:   Position{Line: 2, Character: 11},
+					},
+				},
+			},
+		},
+		references: []Location{
+			{
+				URI: fileURI(bravo),
+				Range: Range{
+					Start: Position{Line: 3, Character: 6},
+					End:   Position{Line: 3, Character: 12},
+				},
+			},
+			{
+				URI: fileURI(alpha),
+				Range: Range{
+					Start: Position{Line: 5, Character: 6},
+					End:   Position{Line: 5, Character: 12},
+				},
+			},
+		},
+	}
+
+	engine := NewRefsEngine(client, nil)
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "target",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"alpha.go:6  ->  _ = target()",
+		"bravo.go:4  ->  _ = target()",
+		"2 references found",
+	}, "\n")
+	if output != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)
+	}
+
+	wantMethods := []string{MethodWorkspaceSymbol, MethodTextDocumentReferences}
+	if !slices.Equal(client.methods, wantMethods) {
+		t.Fatalf("method order = %v, want %v", client.methods, wantMethods)
+	}
+	if client.lastReferenceParams.Context.IncludeDeclaration {
+		t.Fatal("references lookup should set IncludeDeclaration=false")
+	}
+}
+
+func TestRefsAmbiguousSymbolDeterministicOrdering(t *testing.T) {
+	root := t.TempDir()
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "Target",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI: fileURI(filepath.Join(root, "zeta.go")),
+					Range: Range{
+						Start: Position{Line: 9},
+					},
+				},
+			},
+			{
+				Name: "Target",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI: fileURI(filepath.Join(root, "alpha.go")),
+					Range: Range{
+						Start: Position{Line: 1},
+					},
+				},
+			},
+		},
+	}
+
+	engine := NewRefsEngine(client, nil)
+	_, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Target",
+	})
+	if err == nil {
+		t.Fatal("expected ambiguity error, got nil")
+	}
+
+	lines := strings.Split(err.Error(), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("ambiguity output lines = %d, want 3: %q", len(lines), err.Error())
+	}
+
+	wantHeader := `ambiguous symbol "Target" — 2 definitions found. Use --path to narrow scope.`
+	if lines[0] != wantHeader {
+		t.Fatalf("ambiguity header = %q, want %q", lines[0], wantHeader)
+	}
+	if lines[1] != "  - alpha.go:2 (function)" {
+		t.Fatalf("first candidate = %q, want %q", lines[1], "  - alpha.go:2 (function)")
+	}
+	if lines[2] != "  - zeta.go:10 (function)" {
+		t.Fatalf("second candidate = %q, want %q", lines[2], "  - zeta.go:10 (function)")
+	}
+}
+
+func TestRefsKindFilterIncludeExclude(t *testing.T) {
+	root := t.TempDir()
+	targetFile := filepath.Join(root, "target.go")
+	useFile := filepath.Join(root, "use.go")
+	writeTestFile(t, targetFile, "type Target struct{}\n")
+	writeTestFile(t, useFile, "func use() {\n\t_ = Target{}\n}\n")
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "Target",
+				Kind: SymbolKindClass,
+				Location: Location{
+					URI:   fileURI(targetFile),
+					Range: Range{Start: Position{Line: 0}},
+				},
+			},
+			{
+				Name: "Target",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI:   fileURI(filepath.Join(root, "target_func.go")),
+					Range: Range{Start: Position{Line: 0}},
+				},
+			},
+		},
+		references: []Location{
+			{
+				URI:   fileURI(useFile),
+				Range: Range{Start: Position{Line: 1}},
+			},
+		},
+	}
+
+	engine := NewRefsEngine(client, nil)
+	includedOutput, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Target",
+		Kind:          "FUNCTION",
+	})
+	if err != nil {
+		t.Fatalf("Find with function kind returned error: %v", err)
+	}
+	wantIncluded := strings.Join([]string{
+		"use.go:2  ->  _ = Target{}",
+		"1 references found",
+	}, "\n")
+	if includedOutput != wantIncluded {
+		t.Fatalf("included output mismatch\n got: %q\nwant: %q", includedOutput, wantIncluded)
+	}
+
+	_, err = engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Target",
+		Kind:          "method",
+	})
+	if err == nil {
+		t.Fatal("expected not-found error for excluded kind, got nil")
+	}
+	if !errors.Is(err, errSymbolNotFound) {
+		t.Fatalf("error = %v, want errSymbolNotFound", err)
+	}
+	if !strings.Contains(err.Error(), `"Target"`) {
+		t.Fatalf("missing symbol value in error: %q", err.Error())
+	}
+}
+
+func TestRefsInvalidKindExactError(t *testing.T) {
+	engine := NewRefsEngine(nil, nil)
+
+	_, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: t.TempDir(),
+		Symbol:        "Target",
+		Kind:          "BAD_KIND",
+	})
+	if err == nil {
+		t.Fatal("expected invalid kind error, got nil")
+	}
+
+	want := `invalid kind "BAD_KIND" — allowed: function, method, class, interface, type, constant`
+	if err.Error() != want {
+		t.Fatalf("invalid kind error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRefsMissingSymbolDoesNotFallback(t *testing.T) {
+	root := t.TempDir()
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "Other",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI:   fileURI(filepath.Join(root, "other.go")),
+					Range: Range{Start: Position{Line: 0}},
+				},
+			},
+		},
+	}
+	fallback := &stubFallback{}
+	engine := NewRefsEngine(client, fallback)
+
+	_, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "MissingSymbol",
+	})
+	if err == nil {
+		t.Fatal("expected missing symbol error, got nil")
+	}
+	if !errors.Is(err, errSymbolNotFound) {
+		t.Fatalf("error = %v, want errSymbolNotFound", err)
+	}
+	if fallback.called {
+		t.Fatal("fallback should not run when LSP responds with no matching symbol")
+	}
+}
+
+func TestRefsFallbackToGrepIncludesPrecisionNote(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "zeta.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func useZeta() {",
+		"\t_ = target()",
+		"}",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(root, "alpha.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func useAlpha() {",
+		"\t_ = target()",
+		"\t_ = target()",
+		"}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbolErr: errors.New("lsp unavailable"),
+	}
+	engine := NewRefsEngine(client, nil)
+
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "target",
+		FallbackLSP:   "gopls",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"(grep-based - install gopls for precise results)",
+		"alpha.go:4  ->  _ = target()",
+		"alpha.go:5  ->  _ = target()",
+		"zeta.go:4  ->  _ = target()",
+		"3 references found",
+	}, "\n")
+	if output != want {
+		t.Fatalf("fallback output mismatch\n got: %q\nwant: %q", output, want)
+	}
+}
+
+func TestRefsDeferredCommandIntegration(t *testing.T) {
+	t.Skip("blocked by TK-006: refs command wiring pending")
+}
+
+func writeTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) returned error: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) returned error: %v", path, err)
+	}
+}
+
+func fileURI(path string) DocumentURI {
+	slashed := filepath.ToSlash(path)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return DocumentURI("file://" + slashed)
+}

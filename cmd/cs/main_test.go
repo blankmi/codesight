@@ -144,3 +144,62 @@ func TestCapMaxInputChars(t *testing.T) {
 		})
 	}
 }
+
+func TestWrapVectorStoreConnectErrorIncludesAddress(t *testing.T) {
+	t.Setenv("CODESIGHT_DB_ADDRESS", "milvus.example.com:19530")
+	err := wrapVectorStoreConnectError(errors.New("connection refused"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Milvus not reachable") {
+		t.Fatalf("expected agent-friendly Milvus message, got: %s", msg)
+	}
+	if !strings.Contains(msg, "milvus.example.com:19530") {
+		t.Fatalf("expected configured address in error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "CODESIGHT_DB_ADDRESS") {
+		t.Fatalf("expected env var hint in error, got: %s", msg)
+	}
+}
+
+func TestWrapEmbedderConnectErrorIncludesHostAndModel(t *testing.T) {
+	t.Setenv("CODESIGHT_OLLAMA_HOST", "http://ollama.local:11434")
+	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "custom-embed")
+	err := wrapEmbedderConnectError(errors.New("connection refused"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Ollama not reachable") {
+		t.Fatalf("expected agent-friendly Ollama message, got: %s", msg)
+	}
+	if !strings.Contains(msg, "ollama.local:11434") {
+		t.Fatalf("expected configured host in error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "custom-embed") {
+		t.Fatalf("expected model name in error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "CODESIGHT_OLLAMA_HOST") {
+		t.Fatalf("expected env var hint in error, got: %s", msg)
+	}
+}
+
+func TestWrapVectorStoreConnectErrorNilPassthrough(t *testing.T) {
+	if err := wrapVectorStoreConnectError(nil); err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+}
+
+func TestRootCommandIncludesExtractAndExistingCommands(t *testing.T) {
+	subcommands := map[string]bool{}
+	for _, cmd := range rootCmd.Commands() {
+		subcommands[cmd.Name()] = true
+	}
+
+	for _, want := range []string{"index", "search", "status", "clear", "extract", "refs", "callers", "implements"} {
+		if !subcommands[want] {
+			t.Fatalf("root command is missing %q subcommand", want)
+		}
+	}
+}

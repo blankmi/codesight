@@ -1,9 +1,9 @@
 # codesight (`cs`)
 
-Semantic code search for large codebases. Indexes source code using AST-aware chunking and embeddings, stores vectors in Milvus, and provides fast natural-language search over code.
+Unified code intelligence CLI for large codebases. `cs` combines semantic discovery (`search`), surgical symbol extraction (`extract`), and LSP-powered navigation (`refs`, `callers`, `implements`) while preserving existing index lifecycle workflows (`index`, `status`, `clear`).
 
 > **Benchmark note:** A/B testing (88 agent invocations, codebases up to 250K LOC, Sonnet 4.6) showed `cs search` saves **14.5% tokens on conceptual queries** by surfacing relevant files from the semantic index instead of agents reading 30+ files blind. 
-> Grep already handles lexical/reference search optimally — `cs search` fills the gap Grep can't: "how does X work?" across a large codebase. Shorter instructions (7 lines) outperformed verbose ones (29 lines) by 15 percentage points.
+> Grep already handles lexical search optimally. `cs search` fills the conceptual gap Grep can't: "how does X work?" across a large codebase. Shorter instructions (7 lines) outperformed verbose ones (29 lines) by 15 percentage points.
 
 ## How it works
 
@@ -90,7 +90,59 @@ cs status /path/to/repo
 cs clear /path/to/repo
 ```
 
-## Output format
+### Extract a symbol (recommended in this repo)
+
+```bash
+cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind
+cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind --format json
+```
+
+### Find references
+
+```bash
+cs refs NormalizeRefKind
+cs refs NormalizeRefKind --path ./pkg/lsp
+cs refs NormalizeRefKind --kind function
+```
+
+### Find callers
+
+```bash
+cs callers runSearch
+cs callers runSearch --path ./cmd/cs --depth 2
+```
+
+### Find implementations (stretch command; shipped in this repository)
+
+```bash
+cs implements Store
+cs implements Store --path ./pkg
+```
+
+## v2 command matrix
+
+| Command | Signature | Notes |
+|---|---|---|
+| `cs index` | `cs index [path] [--branch <name>] [--commit <sha>] [--force]` | Existing workflow unchanged |
+| `cs search` | `cs search <query> [--path <dir>] [--ext .go,.ts] [--limit <n>]` | Semantic discovery |
+| `cs status` | `cs status [path]` | Existing workflow unchanged |
+| `cs clear` | `cs clear [path]` | Existing workflow unchanged |
+| `cs extract` | `cs extract -f <file-or-dir> -s <symbol> [--format raw|json]` | `--format` supports exactly `raw` (default) or `json` |
+| `cs refs` | `cs refs <symbol> [--path <dir>] [--kind <kind>]` | `--kind` allowed: `function`, `method`, `class`, `interface`, `type`, `constant` |
+| `cs callers` | `cs callers <symbol> [--path <dir>] [--depth <n>]` | Depth default `1`; must be positive |
+| `cs implements` | `cs implements <symbol> [--path <dir>]` | Stretch command delivered here; no grep fallback |
+
+## v2 tool selection policy
+
+In this repository:
+- Use Grep for exact text, identifiers, and lexical pattern matching.
+- Use `cs search` for conceptual discovery when you do not yet know which files matter.
+- Use `cs extract` for symbol extraction (this replaces standalone `symgrep extract` as the default path here).
+- Use `cs refs`, `cs callers`, and `cs implements` for cross-file symbol navigation.
+
+`cs extract` supports: Go, Python, Java, JavaScript, TypeScript, Rust, C++, XML, and HTML.
+
+## Search output format
 
 Search results are plain text, optimized for minimal token usage:
 
@@ -115,8 +167,43 @@ All configuration is via environment variables:
 | `CODESIGHT_EMBEDDING_MODEL`    | Embedding model name | `nomic-embed-text`       |
 | `CODESIGHT_OLLAMA_HOST`        | Ollama endpoint      | `http://127.0.0.1:11434` |
 | `CODESIGHT_OLLAMA_MAX_INPUT_CHARS` | Optional cap for Ollama embed input chars (must be positive int) | (auto-detected/default) |
+| `CODESIGHT_STATE_DIR`          | LSP lifecycle state root (`refs/callers/implements`) | `${HOME}/.codesight` |
 
 `cs index` auto-detects Ollama model context length when available, uses a conservative character budget, and adaptively retries with smaller limits on context-length overflow errors. `CODESIGHT_OLLAMA_MAX_INPUT_CHARS` can only lower that effective limit as a safety cap.
+
+## Docker runtime model for LSP commands
+
+For `cs refs`, `cs callers`, and `cs implements`:
+- LSP servers run as child processes in the same container/runtime as `cs`.
+- Transport is stdio JSON-RPC only (no remote/TCP LSP mode in v2).
+- `host.docker.internal` is for Milvus/Ollama network endpoints only, not LSP transport.
+- `${CODESIGHT_STATE_DIR:-~/.codesight}` persistence is recommended for warm starts, but not required for correctness.
+
+### Mode A: persisted state (warm reuse)
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/workspace" \
+  -v codesight_state:/state \
+  -e CODESIGHT_STATE_DIR=/state \
+  -w /workspace \
+  your-image \
+  cs refs NormalizeRefKind --path /workspace
+```
+
+Run the same command again in the same mounted volume to reuse warmed lifecycle state.
+
+### Mode B: ephemeral state (cold start, still correct)
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  your-image \
+  cs refs NormalizeRefKind --path /workspace
+```
+
+Without a mounted state directory, each container starts cold but command contracts and output remain the same.
 
 ## Architecture
 
@@ -158,15 +245,13 @@ Pre-built skill files for popular coding agents are in `agent-skills/`:
 | Codex       | `agent-skills/codex/cs/SKILL.md`       | Copy `agent-skills/codex/cs` into `$CODEX_HOME/skills/cs`                                               |
 
 > [!IMPORTANT]
-> These skills require project-specific setup (indexing the source code). They should be installed per-project rather than globally to ensure the agent uses the correct index for the current codebase.
+> Install these skills per-project so agents use the correct workspace context. Semantic search commands (`cs search`) require project indexing; extraction/navigation commands do not.
 
-### Making agents use `cs search` reliably
+### Making agents follow the v2 tool policy
 
-Installing the skill alone is not enough — agents will default to built-in tools (grep, glob, file reads) unless you either:
-1. add an explicit instruction to the agent's config, or
-2. directly tell the agent in your prompt to use `cs search`.
+Installing the skill alone is not enough. Agents can still default to built-in tools (grep, glob, broad file reads) unless you also add explicit project instructions.
 
-To make an agent reliably use `cs search`, add the following instruction to the agent's **project-level** config file:
+To make an agent follow the v2 command policy, add the following to the agent's **project-level** config file:
 
 | Agent       | Config file                          |
 |-------------|--------------------------------------|
@@ -177,11 +262,14 @@ To make an agent reliably use `cs search`, add the following instruction to the 
 ```markdown
 Use `cs search "<query>"` via Bash for conceptual questions when you don't know which files matter.
 Use Grep for exact text, identifiers, patterns, and class names.
-Do NOT use cs search for exact-match lookups.
-Do NOT read 5+ files to understand a feature — cs search ranks them for you.
+Use `cs extract -f <file-or-dir> -s <symbol>` for symbol extraction in this repository.
+Use `cs refs <symbol>` for cross-file references (`--kind`: function|method|class|interface|type|constant).
+Use `cs callers <symbol>` for incoming call hierarchy.
+Use `cs implements <symbol>` for type/interface implementation lookup.
+Do not use remote/TCP LSP mode; `cs` runs local child LSP servers over stdio.
 ```
 > [!IMPORTANT]
-> Add this instruction to the **project-level** config file if you want it to apply automatically. `cs` depends on a per-project index, so enabling it globally would make agents try to use `cs search` in unrelated projects that have not been indexed.
+> Add this instruction to the **project-level** config file if you want it to apply automatically. `cs` depends on per-project context (index + workspace path), so enabling it globally can trigger commands in unrelated repos.
 
 > [!NOTE]
 > Skills and referenced files are passive — agents may not follow them reliably. Instructions placed directly in the agent's config file are loaded into the agent's context automatically and have the strongest influence on tool selection behavior.
@@ -190,14 +278,15 @@ Do NOT read 5+ files to understand a feature — cs search ranks them for you.
 
 Ask the agent something like:
 - `Where is authentication handled?`
-- `Find the code that creates the database connection pool.`
-- `Search for JWT validation logic.`
+- `Extract NormalizeRefKind from pkg/lsp/refs.go.`
+- `Find refs for NormalizeRefKind.`
+- `Who calls runSearch at depth 2?`
 
-A correct run should start with `cs search`. If the agent starts with `grep`, `glob`, or broad file reads for these semantic queries, the config instruction is either missing or too weak.
+A correct run should route by intent: conceptual queries start with `cs search`, extraction uses `cs extract`, and symbol navigation uses `cs refs`/`cs callers`. If it starts with broad grep/file reads for those intents, the instruction is missing or too weak.
 
-### Use `codesight` together with `symgrep`
+### Migration note: `symgrep extract` to `cs extract`
 
-Combine `cs search` for semantic discovery with [symgrep](https://github.com/blankmi/symgrep) `extract` for surgical code reading from large files. The recommended agent config above already includes both tools — `cs search` for understanding, `symgrep extract` for reading less.
+Earlier guidance used standalone `symgrep extract` for symbol reads. In v2 for this repository, prefer `cs extract`.
 
 Each tool stays in its lane:
 
@@ -205,7 +294,10 @@ Each tool stays in its lane:
 |---|---|---|
 | Search for text/identifiers | Grep | Models already use Grep efficiently — no instruction needed |
 | Understand a feature/flow | `cs search` | Embedding-based ranking finds relevant files without reading everything |
-| Read one symbol from a large file | `symgrep extract` | Avoids loading 200+ irrelevant lines into context |
+| Read one symbol from a file or directory | `cs extract` | Built-in extraction contract (`raw`/`json`) with deterministic directory traversal |
+| Find references for a symbol | `cs refs` | LSP-first precision with grep fallback note when LSP is unavailable |
+| Trace incoming call hierarchy | `cs callers` | LSP call hierarchy with explicit depth control |
+| List type/interface implementations | `cs implements` | LSP type hierarchy lookup (stretch command delivered in this repository) |
 
 ### Allowlisting `cs` for autonomous use
 

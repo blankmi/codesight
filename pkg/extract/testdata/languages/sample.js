@@ -1,0 +1,3 @@
+function jsTarget() {
+  return "javascript";
+}

@@ -1,0 +1,3 @@
+class JavaTarget {
+  void ping() {}
+}
