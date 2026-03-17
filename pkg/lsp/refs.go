@@ -177,6 +177,17 @@ func (e *RefsEngine) findWithLSP(
 		}
 	}
 
+	// If the LSP returned zero raw symbols, treat it as unavailable so the
+	// grep fallback gets a chance. This covers cases where the language server
+	// hasn't finished indexing the project (e.g. jdtls waiting for Gradle sync).
+	// When the LSP did return symbols but they were filtered out (by kind or
+	// ignore rules), that's a genuine "not found" — no fallback.
+	if len(symbols) == 0 {
+		return "", &lspUnavailableError{
+			cause: fmt.Errorf("LSP returned no symbols for %q", symbol),
+		}
+	}
+
 	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, kind)
 	if err != nil {
 		return "", err
