@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -770,18 +771,25 @@ func startRefsLSPClient(
 	spec lsp.ServerSpec,
 	workspaceRoot string,
 ) (*lsp.Client, error) {
-	transport, err := startRefsLSPTransport(ctx, spec)
+	transport, err := startRefsLSPTransport(ctx, spec, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	client, err := lsp.NewClient(transport)
+	// jdtls needs up to 60s to import a large Gradle/Maven project on first
+	// connect. Other language servers (gopls, pylsp) are fast enough at 10s.
+	timeout := 10 * time.Second
+	if spec.Binary == "jdtls" {
+		timeout = 60 * time.Second
+	}
+
+	client, err := lsp.NewClient(transport, lsp.WithRequestTimeout(timeout))
 	if err != nil {
 		_ = transport.Close()
 		return nil, err
 	}
 
-	initializeParams, err := refsInitializeParams(workspaceRoot)
+	initializeParams, err := refsInitializeParams(workspaceRoot, spec)
 	if err != nil {
 		_ = client.Close()
 		return nil, err
@@ -795,8 +803,17 @@ func startRefsLSPClient(
 	return client, nil
 }
 
-func startRefsLSPTransport(ctx context.Context, spec lsp.ServerSpec) (io.ReadWriteCloser, error) {
+func startRefsLSPTransport(ctx context.Context, spec lsp.ServerSpec, workspaceRoot string) (io.ReadWriteCloser, error) {
 	args := append([]string(nil), spec.Args...)
+
+	// jdtls: persist workspace index under CODESIGHT_STATE_DIR so subsequent
+	// starts reuse the project model instead of re-indexing from scratch.
+	if spec.Binary == "jdtls" {
+		if dataDir, err := jdtlsDataDir(workspaceRoot); err == nil {
+			args = append(args, "-data", dataDir)
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, spec.Binary, args...)
 	cmd.Stderr = io.Discard
 
@@ -826,7 +843,7 @@ func startRefsLSPTransport(ctx context.Context, spec lsp.ServerSpec) (io.ReadWri
 	}, nil
 }
 
-func refsInitializeParams(workspaceRoot string) (lsp.InitializeParams, error) {
+func refsInitializeParams(workspaceRoot string, spec lsp.ServerSpec) (lsp.InitializeParams, error) {
 	rootURI, err := refsWorkspaceURI(workspaceRoot)
 	if err != nil {
 		return lsp.InitializeParams{}, err
@@ -838,7 +855,7 @@ func refsInitializeParams(workspaceRoot string) (lsp.InitializeParams, error) {
 	}
 
 	processID := os.Getpid()
-	return lsp.InitializeParams{
+	params := lsp.InitializeParams{
 		ProcessID:  &processID,
 		RootURI:    rootURI,
 		ClientInfo: &lsp.ClientInfo{Name: "cs"},
@@ -851,7 +868,56 @@ func refsInitializeParams(workspaceRoot string) (lsp.InitializeParams, error) {
 				Name: workspaceName,
 			},
 		},
-	}, nil
+	}
+
+	// jdtls: configure Gradle JDK separately from the jdtls runtime JDK.
+	// This allows jdtls to run on Java 21+ while building projects that
+	// require an older JDK (e.g. Java 17 for hibernate enhancer).
+	if spec.Binary == "jdtls" {
+		if initOpts := jdtlsInitOptions(); initOpts != nil {
+			params.InitializationOptions = initOpts
+		}
+	}
+
+	return params, nil
+}
+
+// jdtlsDataDir returns a persistent workspace data directory for jdtls under
+// CODESIGHT_STATE_DIR. This allows jdtls to cache its project index across
+// restarts instead of re-syncing from scratch.
+func jdtlsDataDir(workspaceRoot string) (string, error) {
+	stateDir, err := lsp.ResolveStateDir()
+	if err != nil {
+		return "", err
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(workspaceRoot)))
+	dir := filepath.Join(stateDir, "jdtls-data", hash[:16])
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// jdtlsInitOptions builds initializationOptions for jdtls, configuring a
+// separate JDK for Gradle builds via CODESIGHT_GRADLE_JAVA_HOME.
+func jdtlsInitOptions() map[string]any {
+	gradleJavaHome := os.Getenv("CODESIGHT_GRADLE_JAVA_HOME")
+	if gradleJavaHome == "" {
+		return nil
+	}
+	return map[string]any{
+		"settings": map[string]any{
+			"java": map[string]any{
+				"import": map[string]any{
+					"gradle": map[string]any{
+						"java": map[string]any{
+							"home": gradleJavaHome,
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func refsWorkspaceURI(workspaceRoot string) (lsp.DocumentURI, error) {
