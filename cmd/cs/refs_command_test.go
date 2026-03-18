@@ -217,6 +217,13 @@ func TestExecuteRefsCommandUsesLSPOutputWhenServerAvailable(t *testing.T) {
 	t.Setenv("PATH", helperBinDir)
 	t.Setenv("CODESIGHT_STATE_DIR", t.TempDir())
 	t.Setenv(refsLSPHelperWorkspaceEnv, workspace)
+	daemonConnector := &testRefsDaemonConnector{err: errors.New("daemon connector should not be called on windows routing")}
+	restoreLSPRuntimeHooks(
+		t,
+		"windows",
+		func(_ *lsp.Registry) lspDaemonConnector { return daemonConnector },
+		startRefsLSPClient,
+	)
 
 	output, err := executeRefsCommand(context.Background(), refsCommandOptions{
 		WorkspaceRoot: workspace,
@@ -234,6 +241,279 @@ func TestExecuteRefsCommandUsesLSPOutputWhenServerAvailable(t *testing.T) {
 	}
 	if !strings.Contains(output, "1 references found") {
 		t.Fatalf("output missing summary line: %q", output)
+	}
+	if daemonConnector.calls != 0 {
+		t.Fatalf("daemon connector calls = %d, want 0 on windows routing", daemonConnector.calls)
+	}
+}
+
+func TestExecuteRefsCommandReusesDaemonBetweenInvocations(t *testing.T) {
+	workspace := t.TempDir()
+	source := strings.Join([]string{
+		"package sample",
+		"",
+		"func Target() {",
+		"    Target()",
+		"}",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	helperBinDir := t.TempDir()
+	helperScriptPath := filepath.Join(helperBinDir, "gopls")
+	helperScript := fmt.Sprintf(
+		"#!/bin/sh\nexec %q -test.run=TestRefsCommandLSPHelperProcess -- %s\n",
+		testBinary,
+		refsLSPHelperArg,
+	)
+	if err := os.WriteFile(helperScriptPath, []byte(helperScript), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	t.Setenv("PATH", helperBinDir)
+	t.Setenv(refsLSPHelperWorkspaceEnv, workspace)
+
+	daemonConnector := &testRefsBridgeDaemonConnector{registry: lsp.NewRegistry()}
+	legacyErr := errors.New("legacy startup should not be used in daemon-routing test")
+	restoreLSPRuntimeHooks(
+		t,
+		"linux",
+		func(_ *lsp.Registry) lspDaemonConnector { return daemonConnector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, legacyErr
+		},
+	)
+
+	opts := refsCommandOptions{
+		WorkspaceRoot: workspace,
+		Symbol:        "Target",
+	}
+	firstOutput, err := executeRefsCommand(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("first executeRefsCommand returned error: %v", err)
+	}
+
+	secondOutput, err := executeRefsCommand(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("second executeRefsCommand returned error: %v", err)
+	}
+	if daemonConnector.calls != 2 {
+		t.Fatalf("daemon connector calls = %d, want 2", daemonConnector.calls)
+	}
+	if daemonConnector.reusedCalls != 1 {
+		t.Fatalf("daemon connector reused calls = %d, want 1", daemonConnector.reusedCalls)
+	}
+	for _, seenWorkspace := range daemonConnector.workspaces {
+		if seenWorkspace != workspace {
+			t.Fatalf("daemon connector workspace = %q, want %q", seenWorkspace, workspace)
+		}
+	}
+	for _, seenLanguage := range daemonConnector.languages {
+		if seenLanguage != "go" {
+			t.Fatalf("daemon connector language = %q, want %q", seenLanguage, "go")
+		}
+	}
+
+	for _, output := range []string{firstOutput, secondOutput} {
+		if strings.Contains(output, "(grep-based - install") {
+			t.Fatalf("refs output unexpectedly used grep fallback: %q", output)
+		}
+		if !strings.Contains(output, "main.go:4  ->  Target()") {
+			t.Fatalf("refs output missing LSP-derived reference line: %q", output)
+		}
+		if !strings.Contains(output, "1 references found") {
+			t.Fatalf("refs output missing summary line: %q", output)
+		}
+	}
+}
+
+func TestExecuteRefsCommandEmitsColdStartHintForSlowJavaDaemonStart(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Main.java"), []byte("class Main { void Target() {} }\n"), 0o600); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	helperBinDir := t.TempDir()
+	helperScriptPath := filepath.Join(helperBinDir, "jdtls")
+	helperScript := fmt.Sprintf(
+		"#!/bin/sh\nexec %q -test.run=TestRefsCommandLSPHelperProcess -- %s\n",
+		testBinary,
+		refsLSPHelperArg,
+	)
+	if err := os.WriteFile(helperScriptPath, []byte(helperScript), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	t.Setenv("PATH", helperBinDir)
+	t.Setenv("CODESIGHT_STATE_DIR", t.TempDir())
+	t.Setenv(refsLSPHelperWorkspaceEnv, workspace)
+
+	daemonConnector := &testRefsHintDaemonConnector{
+		registry: lsp.NewRegistry(),
+		delay:    25 * time.Millisecond,
+		reused:   false,
+	}
+	legacyErr := errors.New("legacy startup should not be used in daemon-routing test")
+	restoreLSPRuntimeHooks(
+		t,
+		"linux",
+		func(_ *lsp.Registry) lspDaemonConnector { return daemonConnector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, legacyErr
+		},
+	)
+
+	previousThreshold := refsColdStartHintThreshold
+	refsColdStartHintThreshold = 10 * time.Millisecond
+	t.Cleanup(func() {
+		refsColdStartHintThreshold = previousThreshold
+	})
+
+	output, err := executeRefsCommand(context.Background(), refsCommandOptions{
+		WorkspaceRoot: workspace,
+		Symbol:        "Target",
+	})
+	if err != nil {
+		t.Fatalf("executeRefsCommand returned error: %v", err)
+	}
+
+	hint := "Tip: run 'cs warmup .' to pre-start the language server"
+	if !strings.Contains(output, hint) {
+		t.Fatalf("refs output missing cold-start hint: %q", output)
+	}
+}
+
+func TestExecuteRefsCommandDoesNotEmitColdStartHintForWarmJavaDaemon(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Main.java"), []byte("class Main { void Target() {} }\n"), 0o600); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	helperBinDir := t.TempDir()
+	helperScriptPath := filepath.Join(helperBinDir, "jdtls")
+	helperScript := fmt.Sprintf(
+		"#!/bin/sh\nexec %q -test.run=TestRefsCommandLSPHelperProcess -- %s\n",
+		testBinary,
+		refsLSPHelperArg,
+	)
+	if err := os.WriteFile(helperScriptPath, []byte(helperScript), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	t.Setenv("PATH", helperBinDir)
+	t.Setenv("CODESIGHT_STATE_DIR", t.TempDir())
+	t.Setenv(refsLSPHelperWorkspaceEnv, workspace)
+
+	daemonConnector := &testRefsHintDaemonConnector{
+		registry: lsp.NewRegistry(),
+		delay:    25 * time.Millisecond,
+		reused:   true,
+	}
+	legacyErr := errors.New("legacy startup should not be used in daemon-routing test")
+	restoreLSPRuntimeHooks(
+		t,
+		"linux",
+		func(_ *lsp.Registry) lspDaemonConnector { return daemonConnector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, legacyErr
+		},
+	)
+
+	previousThreshold := refsColdStartHintThreshold
+	refsColdStartHintThreshold = 10 * time.Millisecond
+	t.Cleanup(func() {
+		refsColdStartHintThreshold = previousThreshold
+	})
+
+	output, err := executeRefsCommand(context.Background(), refsCommandOptions{
+		WorkspaceRoot: workspace,
+		Symbol:        "Target",
+	})
+	if err != nil {
+		t.Fatalf("executeRefsCommand returned error: %v", err)
+	}
+
+	hint := "Tip: run 'cs warmup .' to pre-start the language server"
+	if strings.Contains(output, hint) {
+		t.Fatalf("refs output unexpectedly included cold-start hint on warm daemon: %q", output)
+	}
+}
+
+func TestExecuteRefsCommandDoesNotEmitColdStartHintForNonJavaLanguage(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte("package sample\nfunc Target() {}\n"), 0o600); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	helperBinDir := t.TempDir()
+	helperScriptPath := filepath.Join(helperBinDir, "gopls")
+	helperScript := fmt.Sprintf(
+		"#!/bin/sh\nexec %q -test.run=TestRefsCommandLSPHelperProcess -- %s\n",
+		testBinary,
+		refsLSPHelperArg,
+	)
+	if err := os.WriteFile(helperScriptPath, []byte(helperScript), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	t.Setenv("PATH", helperBinDir)
+	t.Setenv("CODESIGHT_STATE_DIR", t.TempDir())
+	t.Setenv(refsLSPHelperWorkspaceEnv, workspace)
+
+	daemonConnector := &testRefsHintDaemonConnector{
+		registry: lsp.NewRegistry(),
+		delay:    25 * time.Millisecond,
+		reused:   false,
+	}
+	legacyErr := errors.New("legacy startup should not be used in daemon-routing test")
+	restoreLSPRuntimeHooks(
+		t,
+		"linux",
+		func(_ *lsp.Registry) lspDaemonConnector { return daemonConnector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, legacyErr
+		},
+	)
+
+	previousThreshold := refsColdStartHintThreshold
+	refsColdStartHintThreshold = 10 * time.Millisecond
+	t.Cleanup(func() {
+		refsColdStartHintThreshold = previousThreshold
+	})
+
+	output, err := executeRefsCommand(context.Background(), refsCommandOptions{
+		WorkspaceRoot: workspace,
+		Symbol:        "Target",
+	})
+	if err != nil {
+		t.Fatalf("executeRefsCommand returned error: %v", err)
+	}
+
+	hint := "Tip: run 'cs warmup .' to pre-start the language server"
+	if strings.Contains(output, hint) {
+		t.Fatalf("refs output unexpectedly included cold-start hint for non-java flow: %q", output)
 	}
 }
 
@@ -510,4 +790,91 @@ func refsTestFileURI(path string) (lsp.DocumentURI, error) {
 		Scheme: "file",
 		Path:   normalized,
 	}).String()), nil
+}
+
+type testRefsDaemonConnector struct {
+	calls int
+	err   error
+}
+
+func (c *testRefsDaemonConnector) Connect(_ context.Context, _, _ string) (lsp.DaemonConnection, error) {
+	c.calls++
+	if c.err != nil {
+		return lsp.DaemonConnection{}, c.err
+	}
+	return lsp.DaemonConnection{}, nil
+}
+
+type testRefsBridgeDaemonConnector struct {
+	registry *lsp.Registry
+
+	calls       int
+	reusedCalls int
+	workspaces  []string
+	languages   []string
+}
+
+func (c *testRefsBridgeDaemonConnector) Connect(ctx context.Context, workspaceRoot, language string) (lsp.DaemonConnection, error) {
+	c.calls++
+	if c.calls > 1 {
+		c.reusedCalls++
+	}
+	c.workspaces = append(c.workspaces, workspaceRoot)
+	c.languages = append(c.languages, language)
+
+	spec, err := c.registry.Lookup(language)
+	if err != nil {
+		return lsp.DaemonConnection{}, err
+	}
+
+	client, err := startRefsLSPClient(ctx, spec, workspaceRoot)
+	if err != nil {
+		return lsp.DaemonConnection{}, err
+	}
+
+	return lsp.DaemonConnection{
+		Client: client,
+		Lease: lsp.Lease{
+			WorkspaceRoot: workspaceRoot,
+			Language:      language,
+			PID:           9_002,
+			Reused:        c.calls > 1,
+		},
+	}, nil
+}
+
+type testRefsHintDaemonConnector struct {
+	registry *lsp.Registry
+	delay    time.Duration
+	reused   bool
+}
+
+func (c *testRefsHintDaemonConnector) Connect(
+	ctx context.Context,
+	workspaceRoot string,
+	language string,
+) (lsp.DaemonConnection, error) {
+	if c.delay > 0 {
+		time.Sleep(c.delay)
+	}
+
+	spec, err := c.registry.Lookup(language)
+	if err != nil {
+		return lsp.DaemonConnection{}, err
+	}
+
+	client, err := startRefsLSPClient(ctx, spec, workspaceRoot)
+	if err != nil {
+		return lsp.DaemonConnection{}, err
+	}
+
+	return lsp.DaemonConnection{
+		Client: client,
+		Lease: lsp.Lease{
+			WorkspaceRoot: workspaceRoot,
+			Language:      language,
+			PID:           9_005,
+			Reused:        c.reused,
+		},
+	}, nil
 }

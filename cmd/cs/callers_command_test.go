@@ -244,13 +244,19 @@ func TestExecuteCallersCommandReusesLifecycleBetweenInvocations(t *testing.T) {
 		t.Fatalf("write helper script: %v", err)
 	}
 
-	stateDir := t.TempDir()
 	t.Setenv("PATH", helperBinDir)
-	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
 	t.Setenv(callersLSPHelperWorkspaceEnv, workspace)
-	t.Cleanup(func() {
-		_ = lsp.NewLifecycle(lsp.NewRegistry()).Stop(workspace, "go")
-	})
+
+	daemonConnector := &testCallersBridgeDaemonConnector{registry: lsp.NewRegistry()}
+	legacyErr := errors.New("legacy startup should not be used in daemon-routing test")
+	restoreLSPRuntimeHooks(
+		t,
+		"linux",
+		func(_ *lsp.Registry) lspDaemonConnector { return daemonConnector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, legacyErr
+		},
+	)
 
 	opts := callersCommandOptions{
 		WorkspaceRoot: workspace,
@@ -267,6 +273,22 @@ func TestExecuteCallersCommandReusesLifecycleBetweenInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second executeCallersCommand returned error: %v", err)
 	}
+	if daemonConnector.calls != 2 {
+		t.Fatalf("daemon connector calls = %d, want 2", daemonConnector.calls)
+	}
+	if daemonConnector.reusedCalls != 1 {
+		t.Fatalf("daemon connector reused calls = %d, want 1", daemonConnector.reusedCalls)
+	}
+	for _, seenWorkspace := range daemonConnector.workspaces {
+		if seenWorkspace != workspace {
+			t.Fatalf("daemon connector workspace = %q, want %q", seenWorkspace, workspace)
+		}
+	}
+	for _, seenLanguage := range daemonConnector.languages {
+		if seenLanguage != "go" {
+			t.Fatalf("daemon connector language = %q, want %q", seenLanguage, "go")
+		}
+	}
 
 	for _, output := range []string{firstOutput, secondOutput} {
 		if !strings.Contains(output, "Target (main.go:3)") {
@@ -278,6 +300,49 @@ func TestExecuteCallersCommandReusesLifecycleBetweenInvocations(t *testing.T) {
 		if !strings.Contains(output, "1 callers (depth 1)") {
 			t.Fatalf("output missing summary line: %q", output)
 		}
+	}
+}
+
+func TestExecuteCallersCommandWindowsRoutingUsesLegacyStartup(t *testing.T) {
+	workspace := t.TempDir()
+	source := strings.Join([]string{
+		"package sample",
+		"",
+		"func Target() {}",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+
+	helperBinDir := t.TempDir()
+	helperScriptPath := filepath.Join(helperBinDir, "gopls")
+	if err := os.WriteFile(helperScriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+	t.Setenv("PATH", helperBinDir)
+
+	legacyErr := errors.New("legacy startup used")
+	connector := &testCallersDaemonConnector{err: errors.New("daemon connector should not be called on windows")}
+	restoreLSPRuntimeHooks(
+		t,
+		"windows",
+		func(_ *lsp.Registry) lspDaemonConnector { return connector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, legacyErr
+		},
+	)
+
+	_, err := executeCallersCommand(context.Background(), callersCommandOptions{
+		WorkspaceRoot: workspace,
+		Symbol:        "Target",
+		Depth:         1,
+	})
+	if !errors.Is(err, legacyErr) {
+		t.Fatalf("executeCallersCommand error = %v, want legacy error %v", err, legacyErr)
+	}
+	if connector.calls != 0 {
+		t.Fatalf("daemon connector calls = %d, want 0 on windows routing", connector.calls)
 	}
 }
 
@@ -496,4 +561,82 @@ func hasCallersHelperArg(arg string) bool {
 		}
 	}
 	return false
+}
+
+type testCallersDaemonConnector struct {
+	calls int
+	err   error
+}
+
+func (c *testCallersDaemonConnector) Connect(_ context.Context, _, _ string) (lsp.DaemonConnection, error) {
+	c.calls++
+	if c.err != nil {
+		return lsp.DaemonConnection{}, c.err
+	}
+	return lsp.DaemonConnection{}, nil
+}
+
+type testCallersBridgeDaemonConnector struct {
+	registry *lsp.Registry
+
+	calls       int
+	reusedCalls int
+	workspaces  []string
+	languages   []string
+}
+
+func (c *testCallersBridgeDaemonConnector) Connect(ctx context.Context, workspaceRoot, language string) (lsp.DaemonConnection, error) {
+	c.calls++
+	if c.calls > 1 {
+		c.reusedCalls++
+	}
+	c.workspaces = append(c.workspaces, workspaceRoot)
+	c.languages = append(c.languages, language)
+
+	spec, err := c.registry.Lookup(language)
+	if err != nil {
+		return lsp.DaemonConnection{}, err
+	}
+
+	client, err := startRefsLSPClient(ctx, spec, workspaceRoot)
+	if err != nil {
+		return lsp.DaemonConnection{}, err
+	}
+
+	return lsp.DaemonConnection{
+		Client: client,
+		Lease: lsp.Lease{
+			WorkspaceRoot: workspaceRoot,
+			Language:      language,
+			PID:           9_001,
+			Reused:        c.calls > 1,
+		},
+	}, nil
+}
+
+func restoreLSPRuntimeHooks(
+	t *testing.T,
+	goos string,
+	daemonFactory func(*lsp.Registry) lspDaemonConnector,
+	legacyStarter func(context.Context, lsp.ServerSpec, string) (*lsp.Client, error),
+) {
+	t.Helper()
+
+	previousGOOS := lspRuntimeGOOS
+	previousDaemonFactory := lspRuntimeNewDaemonConnector
+	previousLegacyStarter := lspRuntimeLegacyStarter
+
+	lspRuntimeGOOS = goos
+	if daemonFactory != nil {
+		lspRuntimeNewDaemonConnector = daemonFactory
+	}
+	if legacyStarter != nil {
+		lspRuntimeLegacyStarter = legacyStarter
+	}
+
+	t.Cleanup(func() {
+		lspRuntimeGOOS = previousGOOS
+		lspRuntimeNewDaemonConnector = previousDaemonFactory
+		lspRuntimeLegacyStarter = previousLegacyStarter
+	})
 }

@@ -47,6 +47,7 @@ func buildConfigDisplayEntries(cfg *configpkg.Config) []configDisplayEntry {
 		{Key: "embedding.model", Value: cfg.Embedding.Model, Source: configValueSource(cfg, "embedding.model")},
 		{Key: "embedding.ollama_host", Value: cfg.Embedding.OllamaHost, Source: configValueSource(cfg, "embedding.ollama_host")},
 		{Key: "index.warm_lsp", Value: strconv.FormatBool(cfg.Index.WarmLSP), Source: configValueSource(cfg, "index.warm_lsp")},
+		{Key: "lsp.daemon.idle_timeout", Value: cfg.LSP.Daemon.IdleTimeout, Source: configValueSource(cfg, "lsp.daemon.idle_timeout")},
 		{Key: "lsp.go.build_flags", Value: strings.Join(cfg.LSP.Go.BuildFlags, ","), Source: configValueSource(cfg, "lsp.go.build_flags")},
 		{Key: "lsp.java.args", Value: strings.Join(cfg.LSP.Java.Args, ","), Source: configValueSource(cfg, "lsp.java.args")},
 		{Key: "lsp.java.gradle_java_home", Value: cfg.LSP.Java.GradleJavaHome, Source: configValueSource(cfg, "lsp.java.gradle_java_home")},

@@ -30,6 +30,7 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 		"embedding.model":           {Value: "nomic-embed-text", Source: "default"},
 		"embedding.ollama_host":     {Value: "http://127.0.0.1:11434", Source: "default"},
 		"index.warm_lsp":            {Value: "false", Source: "default"},
+		"lsp.daemon.idle_timeout":   {Value: "10m", Source: "default"},
 		"lsp.go.build_flags":        {Value: "", Source: "default"},
 		"lsp.java.args":             {Value: "", Source: "default"},
 		"lsp.java.gradle_java_home": {Value: "", Source: "default"},
@@ -60,6 +61,9 @@ func TestConfig_WithProjectConfig(t *testing.T) {
 	writeTestFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
 [embedding]
 model = "project-model"
+
+[lsp.daemon]
+idle_timeout = "25s"
 `)
 
 	stdout, _, err := executeRootCommand(t, "config", projectDir)
@@ -71,6 +75,9 @@ model = "project-model"
 	if got := entries["embedding.model"]; got.Value != "project-model" || got.Source != ".codesight/config.toml" {
 		t.Fatalf("embedding.model = %#v, want value project-model with source .codesight/config.toml", got)
 	}
+	if got := entries["lsp.daemon.idle_timeout"]; got.Value != "25s" || got.Source != ".codesight/config.toml" {
+		t.Fatalf("lsp.daemon.idle_timeout = %#v, want value 25s with source .codesight/config.toml", got)
+	}
 	if got := entries["db.type"]; got.Source != "default" {
 		t.Fatalf("db.type source = %q, want default", got.Source)
 	}
@@ -80,6 +87,7 @@ func TestConfig_WithEnvOverride(t *testing.T) {
 	setTestHome(t)
 	clearTestEnv(t)
 	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model")
+	t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "40s")
 
 	projectDir := t.TempDir()
 
@@ -91,6 +99,9 @@ func TestConfig_WithEnvOverride(t *testing.T) {
 	entries := parseConfigOutput(t, stdout)
 	if got := entries["embedding.model"]; got.Value != "env-model" || got.Source != "CODESIGHT_EMBEDDING_MODEL" {
 		t.Fatalf("embedding.model = %#v, want value env-model with source CODESIGHT_EMBEDDING_MODEL", got)
+	}
+	if got := entries["lsp.daemon.idle_timeout"]; got.Value != "40s" || got.Source != "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT" {
+		t.Fatalf("lsp.daemon.idle_timeout = %#v, want value 40s with source CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", got)
 	}
 }
 
@@ -189,4 +200,3 @@ func outputLines(stdout string) []string {
 	}
 	return strings.Split(trimmed, "\n")
 }
-

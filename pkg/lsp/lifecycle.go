@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +31,7 @@ type Lease struct {
 	WorkspaceRoot string
 	Language      string
 	StateKey      string
+	SocketPath    string
 	PID           int
 	Binary        string
 	Args          []string
@@ -112,12 +112,14 @@ func ResolveStateDir() (string, error) {
 }
 
 // StateKey returns the deterministic lifecycle key for a workspace/language tuple.
+// The key is truncated to 16 hex characters to keep Unix domain socket paths
+// under the 104-byte limit imposed by macOS (struct sockaddr_un.sun_path).
 func StateKey(workspaceRoot, language string) string {
 	normalizedRoot := filepath.Clean(strings.TrimSpace(workspaceRoot))
 	normalizedLanguage := normalizeLanguage(language)
 
 	sum := sha256.Sum256([]byte(normalizedRoot + "\x00" + normalizedLanguage))
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:8])
 }
 
 // Ensure reuses an active server for (workspace, language) or starts a new one.
@@ -151,47 +153,64 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 	if err != nil {
 		return Lease{}, err
 	}
+	socketPath, err := l.socketPathForKey(stateKey)
+	if err != nil {
+		return Lease{}, err
+	}
 
 	now := time.Now()
 	state, stateErr := readStateFile(statePath)
 	if stateErr == nil {
 		if l.isIdle(state, now) {
-			_ = killProcess(state.PID)
-			_ = os.Remove(statePath)
+			_ = l.stopStateProcess(statePath, state)
 		} else if processAlive(state.PID) {
-			state.LastUsedUnixNano = now.UnixNano()
-			if err := writeStateFile(statePath, state); err != nil {
-				return Lease{}, err
+			socketHealthCtx, cancel := context.WithTimeout(ctx, defaultDaemonShutdownTimeout)
+			socketErr := daemonSocketHealthy(socketHealthCtx, state.SocketPath)
+			cancel()
+			if socketErr == nil {
+				state.LastUsedUnixNano = now.UnixNano()
+				if err := writeStateFile(statePath, state); err != nil {
+					return Lease{}, err
+				}
+				return leaseFromState(state, true), nil
 			}
-			return leaseFromState(state, true), nil
+			_ = l.stopStateProcess(statePath, state)
 		} else {
-			_ = os.Remove(statePath)
+			_ = removeStateArtifacts(statePath, socketPathForState(statePath, state.StateKey))
 		}
 	} else if !errors.Is(stateErr, os.ErrNotExist) {
-		_ = os.Remove(statePath)
+		_ = removeStateArtifacts(statePath, socketPath)
 	}
 
 	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
 
-	cmd := exec.Command(spec.Binary, spec.Args...)
-	if err := cmd.Start(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return Lease{}, fmt.Errorf("LSP required but %s not found. Install: %s", spec.Binary, spec.InstallHint)
-		}
-		return Lease{}, fmt.Errorf("start language server %s: %w", spec.Binary, err)
+	if _, err := exec.LookPath(spec.Binary); err != nil {
+		return Lease{}, fmt.Errorf("LSP required but %s not found. Install: %s", spec.Binary, spec.InstallHint)
 	}
 
-	go func() {
-		_ = cmd.Wait()
-	}()
+	daemonConfig := daemonProcessConfig{
+		WorkspaceRoot: canonicalRoot,
+		Language:      spec.Language,
+		StateKey:      stateKey,
+		StatePath:     statePath,
+		SocketPath:    socketPath,
+		Binary:        spec.Binary,
+		Args:          append([]string(nil), spec.Args...),
+		IdleTimeoutNS: int64(l.idleTimeout),
+	}
+	pid, err := launchDaemonProcess(ctx, daemonConfig)
+	if err != nil {
+		return Lease{}, fmt.Errorf("start lsp daemon: %w", err)
+	}
 
 	state = lifecycleState{
 		WorkspaceRoot:    canonicalRoot,
 		Language:         spec.Language,
 		StateKey:         stateKey,
-		PID:              cmd.Process.Pid,
+		SocketPath:       socketPath,
+		PID:              pid,
 		Binary:           spec.Binary,
 		Args:             append([]string(nil), spec.Args...),
 		StartedUnixNano:  now.UnixNano(),
@@ -228,17 +247,11 @@ func (l *Lifecycle) Stop(workspaceRoot, language string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		_ = os.Remove(statePath)
+		_ = removeStateArtifacts(statePath, socketPathForState(statePath, stateKey))
 		return nil
 	}
 
-	if err := killProcess(state.PID); err != nil {
-		return err
-	}
-	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	return l.stopStateProcess(statePath, state)
 }
 
 // ShutdownIdle stops servers whose state indicates they exceeded idle timeout.
@@ -272,7 +285,7 @@ func (l *Lifecycle) ShutdownIdle(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != lifecycleStateFileExtension {
 			continue
 		}
 
@@ -286,7 +299,7 @@ func (l *Lifecycle) ShutdownIdle(ctx context.Context) error {
 		lock.Lock()
 		state, err := readStateFile(statePath)
 		if err != nil {
-			_ = os.Remove(statePath)
+			_ = removeStateArtifacts(statePath, socketPathForState(statePath, stateKey))
 			lock.Unlock()
 			continue
 		}
@@ -294,10 +307,7 @@ func (l *Lifecycle) ShutdownIdle(ctx context.Context) error {
 			lock.Unlock()
 			continue
 		}
-		if err := killProcess(state.PID); err != nil {
-			shutdownErrs = append(shutdownErrs, err)
-		}
-		if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := l.stopStateProcess(statePath, state); err != nil {
 			shutdownErrs = append(shutdownErrs, err)
 		}
 		lock.Unlock()
@@ -349,7 +359,15 @@ func (l *Lifecycle) statePathForKey(stateKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, stateKey+".json"), nil
+	return filepath.Join(root, stateKey+lifecycleStateFileExtension), nil
+}
+
+func (l *Lifecycle) socketPathForKey(stateKey string) (string, error) {
+	statePath, err := l.statePathForKey(stateKey)
+	if err != nil {
+		return "", err
+	}
+	return socketPathForState(statePath, stateKey), nil
 }
 
 func (l *Lifecycle) lockForKey(stateKey string) *sync.Mutex {
@@ -365,58 +383,51 @@ func (l *Lifecycle) lockForKey(stateKey string) *sync.Mutex {
 	return lock
 }
 
-type lifecycleState struct {
-	WorkspaceRoot    string   `json:"workspace_root"`
-	Language         string   `json:"language"`
-	StateKey         string   `json:"state_key"`
-	PID              int      `json:"pid"`
-	Binary           string   `json:"binary"`
-	Args             []string `json:"args"`
-	StartedUnixNano  int64    `json:"started_unix_nano"`
-	LastUsedUnixNano int64    `json:"last_used_unix_nano"`
-}
-
-func readStateFile(path string) (lifecycleState, error) {
-	var state lifecycleState
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return state, err
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		return lifecycleState{}, err
-	}
-	if state.StateKey == "" {
-		state.StateKey = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	}
-	return state, nil
-}
-
-func writeStateFile(path string, state lifecycleState) error {
-	payload, err := json.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("marshal lifecycle state: %w", err)
-	}
-
-	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, payload, 0o600); err != nil {
-		return fmt.Errorf("write lifecycle state: %w", err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("rename lifecycle state: %w", err)
-	}
-	return nil
-}
-
 func leaseFromState(state lifecycleState, reused bool) Lease {
 	return Lease{
 		WorkspaceRoot: state.WorkspaceRoot,
 		Language:      state.Language,
 		StateKey:      state.StateKey,
+		SocketPath:    state.SocketPath,
 		PID:           state.PID,
 		Binary:        state.Binary,
 		Args:          append([]string(nil), state.Args...),
 		Reused:        reused,
 	}
+}
+
+func (l *Lifecycle) stopStateProcess(statePath string, state lifecycleState) error {
+	socketPath := socketPathForState(statePath, state.StateKey)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultDaemonShutdownTimeout)
+	_ = shutdownDaemonViaSocket(shutdownCtx, socketPath)
+	cancel()
+
+	var stopErrs []error
+	if processAlive(state.PID) {
+		if err := killProcess(state.PID); err != nil {
+			stopErrs = append(stopErrs, err)
+		}
+	}
+	if err := removeStateArtifacts(statePath, socketPath); err != nil {
+		stopErrs = append(stopErrs, err)
+	}
+	return errors.Join(stopErrs...)
+}
+
+func removeStateArtifacts(statePath, socketPath string) error {
+	var removeErrs []error
+	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		removeErrs = append(removeErrs, err)
+	}
+	if strings.TrimSpace(socketPath) != "" {
+		if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			removeErrs = append(removeErrs, err)
+		}
+	}
+	logPath := strings.TrimSuffix(statePath, filepath.Ext(statePath)) + ".log"
+	_ = os.Remove(logPath)
+	return errors.Join(removeErrs...)
 }
 
 func canonicalWorkspaceRoot(workspaceRoot string) (string, error) {

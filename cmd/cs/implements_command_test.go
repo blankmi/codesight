@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/blankbytes/codesight/pkg/lsp"
 )
 
 func TestImplementsCommandRequiresSymbolArgument(t *testing.T) {
@@ -155,6 +157,43 @@ func TestImplementsCommandOutputPassThroughFormatContract(t *testing.T) {
 	}
 }
 
+func TestExecuteImplementsCommandUsesDaemonConnectorOnUnix(t *testing.T) {
+	workspace := t.TempDir()
+	source := "package sample\n\ntype Target interface { run() }\n"
+	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("write workspace file: %v", err)
+	}
+
+	helperBinDir := t.TempDir()
+	helperScriptPath := filepath.Join(helperBinDir, "gopls")
+	if err := os.WriteFile(helperScriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+	t.Setenv("PATH", helperBinDir)
+
+	daemonErr := errors.New("daemon connector used")
+	connector := &testImplementsDaemonConnector{err: daemonErr}
+	restoreLSPRuntimeHooks(
+		t,
+		"linux",
+		func(_ *lsp.Registry) lspDaemonConnector { return connector },
+		func(_ context.Context, _ lsp.ServerSpec, _ string) (*lsp.Client, error) {
+			return nil, errors.New("legacy path should not be used on unix routing")
+		},
+	)
+
+	_, err := executeImplementsCommand(context.Background(), implementsCommandOptions{
+		WorkspaceRoot: workspace,
+		Symbol:        "Target",
+	})
+	if !errors.Is(err, daemonErr) {
+		t.Fatalf("executeImplementsCommand error = %v, want daemon error %v", err, daemonErr)
+	}
+	if connector.calls != 1 {
+		t.Fatalf("daemon connector calls = %d, want 1", connector.calls)
+	}
+}
+
 func executeImplementsRootCommand(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	resetImplementsCommandFlagState(t)
@@ -191,4 +230,17 @@ func restoreRunImplementsCommand(t *testing.T, runner func(context.Context, impl
 	t.Cleanup(func() {
 		runImplementsCommand = previous
 	})
+}
+
+type testImplementsDaemonConnector struct {
+	calls int
+	err   error
+}
+
+func (c *testImplementsDaemonConnector) Connect(_ context.Context, _, _ string) (lsp.DaemonConnection, error) {
+	c.calls++
+	if c.err != nil {
+		return lsp.DaemonConnection{}, c.err
+	}
+	return lsp.DaemonConnection{}, nil
 }

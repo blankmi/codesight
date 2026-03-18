@@ -27,7 +27,9 @@ const (
 	envMaxInputChars      = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
 	envStateDir           = "CODESIGHT_STATE_DIR"
 	envGradleJavaHome     = "CODESIGHT_GRADLE_JAVA_HOME"
+	envLSPDaemonTimeout   = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
 	defaultJavaTimeout    = "60s"
+	defaultDaemonTimeout  = "10m"
 	defaultDBType         = "milvus"
 	defaultDBAddress      = "localhost:19530"
 	defaultOllamaHost     = "http://127.0.0.1:11434"
@@ -46,6 +48,7 @@ const (
 	keyLSPJavaTimeout    = "lsp.java.timeout"
 	keyLSPJavaArgs       = "lsp.java.args"
 	keyLSPGoBuildFlags   = "lsp.go.build_flags"
+	keyLSPDaemonTimeout  = "lsp.daemon.idle_timeout"
 	keyIndexWarmLSP      = "index.warm_lsp"
 )
 
@@ -73,8 +76,9 @@ type EmbeddingConfig struct {
 }
 
 type LSPConfig struct {
-	Java JavaLSPConfig `toml:"java"`
-	Go   GoLSPConfig   `toml:"go"`
+	Java   JavaLSPConfig   `toml:"java"`
+	Go     GoLSPConfig     `toml:"go"`
+	Daemon DaemonLSPConfig `toml:"daemon"`
 }
 
 type JavaLSPConfig struct {
@@ -85,6 +89,10 @@ type JavaLSPConfig struct {
 
 type GoLSPConfig struct {
 	BuildFlags []string `toml:"build_flags"`
+}
+
+type DaemonLSPConfig struct {
+	IdleTimeout string `toml:"idle_timeout"`
 }
 
 type IndexConfig struct {
@@ -112,8 +120,9 @@ type layerEmbeddingConfig struct {
 }
 
 type layerLSPConfig struct {
-	Java layerJavaLSPConfig `toml:"java"`
-	Go   layerGoLSPConfig   `toml:"go"`
+	Java   layerJavaLSPConfig   `toml:"java"`
+	Go     layerGoLSPConfig     `toml:"go"`
+	Daemon layerDaemonLSPConfig `toml:"daemon"`
 }
 
 type layerJavaLSPConfig struct {
@@ -124,6 +133,10 @@ type layerJavaLSPConfig struct {
 
 type layerGoLSPConfig struct {
 	BuildFlags *[]string `toml:"build_flags"`
+}
+
+type layerDaemonLSPConfig struct {
+	IdleTimeout *string `toml:"idle_timeout"`
 }
 
 type layerIndexConfig struct {
@@ -151,6 +164,9 @@ func Defaults() *Config {
 			},
 			Go: GoLSPConfig{
 				BuildFlags: []string{},
+			},
+			Daemon: DaemonLSPConfig{
+				IdleTimeout: defaultDaemonTimeout,
 			},
 		},
 		Index: IndexConfig{
@@ -185,7 +201,9 @@ func LoadConfig(projectPath string) (*Config, error) {
 		return nil, err
 	}
 
-	applyEnv(cfg)
+	if err := applyEnv(cfg); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }
@@ -319,6 +337,13 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 		cfg.LSP.Go.BuildFlags = cloneStrings(*layer.LSP.Go.BuildFlags)
 		cfg.Provenance[keyLSPGoBuildFlags] = source
 	}
+	if layer.LSP.Daemon.IdleTimeout != nil {
+		if _, err := parsePositiveDuration(*layer.LSP.Daemon.IdleTimeout, keyLSPDaemonTimeout); err != nil {
+			return err
+		}
+		cfg.LSP.Daemon.IdleTimeout = strings.TrimSpace(*layer.LSP.Daemon.IdleTimeout)
+		cfg.Provenance[keyLSPDaemonTimeout] = source
+	}
 
 	if layer.Index.WarmLSP != nil {
 		cfg.Index.WarmLSP = *layer.Index.WarmLSP
@@ -328,7 +353,7 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 	return nil
 }
 
-func applyEnv(cfg *Config) {
+func applyEnv(cfg *Config) error {
 	if value, ok := os.LookupEnv(envDBType); ok && value != "" {
 		cfg.DB.Type = value
 		cfg.Provenance[keyDBType] = envDBType
@@ -371,6 +396,18 @@ func applyEnv(cfg *Config) {
 		cfg.LSP.Java.GradleJavaHome = value
 		cfg.Provenance[keyLSPJavaGradleHome] = envGradleJavaHome
 	}
+	if raw, ok := os.LookupEnv(envLSPDaemonTimeout); ok {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed != "" {
+			if _, err := parsePositiveDuration(trimmed, keyLSPDaemonTimeout); err != nil {
+				return err
+			}
+			cfg.LSP.Daemon.IdleTimeout = trimmed
+			cfg.Provenance[keyLSPDaemonTimeout] = envLSPDaemonTimeout
+		}
+	}
+
+	return nil
 }
 
 func cloneStrings(values []string) []string {
@@ -395,8 +432,28 @@ func allConfigKeys() []string {
 		keyLSPJavaTimeout,
 		keyLSPJavaArgs,
 		keyLSPGoBuildFlags,
+		keyLSPDaemonTimeout,
 		keyIndexWarmLSP,
 	}
+}
+
+func (cfg *Config) LSPDaemonIdleTimeoutDuration() (time.Duration, error) {
+	if cfg == nil {
+		cfg = Defaults()
+	}
+	return parsePositiveDuration(cfg.LSP.Daemon.IdleTimeout, keyLSPDaemonTimeout)
+}
+
+func parsePositiveDuration(raw string, key string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := time.ParseDuration(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", key, raw, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("invalid %s %q: must be > 0", key, raw)
+	}
+	return parsed, nil
 }
 
 func warnf(format string, args ...any) {

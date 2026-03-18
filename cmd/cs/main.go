@@ -145,6 +145,14 @@ var (
 	runRefsCommand       = executeRefsCommand
 	runCallersCommand    = executeCallersCommand
 	runImplementsCommand = executeImplementsCommand
+	runIndexWarmup       = executeIndexWarmup
+
+	detectIndexWarmupLanguage = func(workspaceRoot string, registry *lsp.Registry) (string, error) {
+		return detectRefsLanguage(workspaceRoot, registry)
+	}
+	runWorkspaceLSPWarmup = func(ctx context.Context, workspaceRoot, language string) error {
+		return executeLSPWarmup(ctx, workspaceRoot, language)
+	}
 
 	runtimeConfig = configpkg.Defaults()
 
@@ -184,6 +192,7 @@ func init() {
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(callersCmd)
 	rootCmd.AddCommand(implementsCmd)
+	rootCmd.AddCommand(warmupCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(clearCmd)
 	rootCmd.AddCommand(configCmd)
@@ -248,6 +257,11 @@ func configProjectPath(cmd *cobra.Command, args []string) (string, error) {
 			return "", err
 		}
 		return resolveRefsWorkspaceRoot(pathFlag)
+	case warmupCmd.Name():
+		if len(args) > 0 {
+			return resolveRefsWorkspaceRoot(args[0])
+		}
+		return resolveRefsWorkspaceRoot("")
 	default:
 		return ".", nil
 	}
@@ -364,6 +378,44 @@ func detectGitCommit(path string) (string, error) {
 	return commit, nil
 }
 
+func shouldWarmLSPOnIndex(cfg *configpkg.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Index.WarmLSP
+}
+
+func executeIndexWarmup(ctx context.Context, cfg *configpkg.Config, workspaceRoot string) error {
+	if !shouldWarmLSPOnIndex(cfg) {
+		return nil
+	}
+
+	registry := lsp.NewRegistry()
+	language, err := detectIndexWarmupLanguage(workspaceRoot, registry)
+	if err != nil {
+		if errors.Is(err, errNoSupportedRefsLanguage) {
+			return nil
+		}
+		return err
+	}
+	if language != "java" {
+		return nil
+	}
+	return runWorkspaceLSPWarmup(ctx, workspaceRoot, language)
+}
+
+func startIndexWarmupInBackground(cfg *configpkg.Config, workspaceRoot string, logger *slog.Logger) {
+	if !shouldWarmLSPOnIndex(cfg) {
+		return
+	}
+
+	go func() {
+		if err := runIndexWarmup(context.Background(), cfg, workspaceRoot); err != nil && logger != nil {
+			logger.Warn("lsp warmup failed", "error", err)
+		}
+	}()
+}
+
 func runIndex(cmd *cobra.Command, args []string) error {
 	cfg := currentConfig()
 
@@ -376,6 +428,8 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	logger := newLogger()
+	startIndexWarmupInBackground(cfg, path, logger)
+
 	commit := strings.TrimSpace(flagCommit)
 	if commit == "" {
 		detectedCommit, err := detectGitCommit(path)
@@ -649,153 +703,6 @@ func resolveRefsWorkspaceRoot(pathFlag string) (string, error) {
 	return filepath.Dir(workspaceRoot), nil
 }
 
-func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, error) {
-	registry := lsp.NewRegistry()
-	fallbackBinary := ""
-	var client *lsp.Client
-
-	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
-	if err != nil {
-		if !errors.Is(err, errNoSupportedRefsLanguage) {
-			return "", err
-		}
-		// No supported language detected — will use grep fallback below.
-	} else {
-		spec, err := registry.Lookup(language)
-		if err == nil {
-			fallbackBinary = spec.Binary
-		}
-
-		// Attempt LSP startup; on any failure, fall through to grep fallback
-		// instead of hard-erroring. This covers: binary not found, binary
-		// crashes on startup, client init failures.
-		if err == nil {
-			c, lspErr := startRefsLSPClient(ctx, spec, opts.WorkspaceRoot)
-			if lspErr == nil {
-				client = c
-			}
-		}
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), refsLSPShutdownTimeout)
-			defer cancel()
-			_ = client.Shutdown(shutdownCtx)
-		}()
-	}
-
-	engine := lsp.NewRefsEngine(nil, nil)
-	if client != nil {
-		engine = lsp.NewRefsEngine(client, nil)
-	}
-	return engine.Find(ctx, lsp.RefsOptions{
-		WorkspaceRoot: opts.WorkspaceRoot,
-		Symbol:        opts.Symbol,
-		Kind:          opts.Kind,
-		FallbackLSP:   fallbackBinary,
-	})
-}
-
-func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (string, error) {
-	registry := lsp.NewRegistry()
-
-	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
-	if err != nil {
-		return "", err
-	}
-
-	spec, err := registry.Lookup(language)
-	if err != nil {
-		return "", err
-	}
-	if _, err := exec.LookPath(spec.Binary); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return "", callersMissingLSPError(ctx, opts, spec)
-		}
-		return "", err
-	}
-
-	client, err := startRefsLSPClient(ctx, spec, opts.WorkspaceRoot)
-	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return "", callersMissingLSPError(ctx, opts, spec)
-		}
-		return "", err
-	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), refsLSPShutdownTimeout)
-		defer cancel()
-		_ = client.Shutdown(shutdownCtx)
-	}()
-
-	return lsp.NewCallersEngine(client).Find(ctx, lsp.CallersOptions{
-		WorkspaceRoot: opts.WorkspaceRoot,
-		Symbol:        opts.Symbol,
-		Depth:         opts.Depth,
-		LSPBinary:     spec.Binary,
-		LSPInstall:    spec.InstallHint,
-	})
-}
-
-func executeImplementsCommand(ctx context.Context, opts implementsCommandOptions) (string, error) {
-	registry := lsp.NewRegistry()
-
-	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
-	if err != nil {
-		return "", err
-	}
-
-	spec, err := registry.Lookup(language)
-	if err != nil {
-		return "", err
-	}
-	if _, err := exec.LookPath(spec.Binary); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return "", implementsMissingLSPError(ctx, opts, spec)
-		}
-		return "", err
-	}
-
-	client, err := startRefsLSPClient(ctx, spec, opts.WorkspaceRoot)
-	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return "", implementsMissingLSPError(ctx, opts, spec)
-		}
-		return "", err
-	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), refsLSPShutdownTimeout)
-		defer cancel()
-		_ = client.Shutdown(shutdownCtx)
-	}()
-
-	return lsp.NewImplementsEngine(client).Find(ctx, lsp.ImplementsOptions{
-		WorkspaceRoot: opts.WorkspaceRoot,
-		Symbol:        opts.Symbol,
-		LSPBinary:     spec.Binary,
-		LSPInstall:    spec.InstallHint,
-	})
-}
-
-func callersMissingLSPError(ctx context.Context, opts callersCommandOptions, spec lsp.ServerSpec) error {
-	_, err := lsp.NewCallersEngine(nil).Find(ctx, lsp.CallersOptions{
-		WorkspaceRoot: opts.WorkspaceRoot,
-		Symbol:        opts.Symbol,
-		Depth:         opts.Depth,
-		LSPBinary:     spec.Binary,
-		LSPInstall:    spec.InstallHint,
-	})
-	return err
-}
-
-func implementsMissingLSPError(ctx context.Context, opts implementsCommandOptions, spec lsp.ServerSpec) error {
-	_, err := lsp.NewImplementsEngine(nil).Find(ctx, lsp.ImplementsOptions{
-		WorkspaceRoot: opts.WorkspaceRoot,
-		Symbol:        opts.Symbol,
-		LSPBinary:     spec.Binary,
-		LSPInstall:    spec.InstallHint,
-	})
-	return err
-}
-
 func startRefsLSPClient(
 	ctx context.Context,
 	spec lsp.ServerSpec,
@@ -904,7 +811,11 @@ func refsInitializeParams(workspaceRoot string, spec lsp.ServerSpec) (lsp.Initia
 	// This allows jdtls to run on Java 21+ while building projects that
 	// require an older JDK (e.g. Java 17 for hibernate enhancer).
 	if spec.Binary == "jdtls" {
-		if initOpts := jdtlsInitOptions(currentConfig()); initOpts != nil {
+		initOpts, err := jdtlsInitOptionsForWorkspace(workspaceRoot, currentConfig())
+		if err != nil {
+			return lsp.InitializeParams{}, err
+		}
+		if initOpts != nil {
 			params.InitializationOptions = initOpts
 		}
 	}
@@ -1018,23 +929,11 @@ func fallbackJdtlsDataDir(workspaceRoot string) (string, error) {
 // jdtlsInitOptions builds initializationOptions for jdtls, configuring a
 // separate JDK for Gradle builds via CODESIGHT_GRADLE_JAVA_HOME.
 func jdtlsInitOptions(cfg *configpkg.Config) map[string]any {
-	gradleJavaHome := cfg.LSP.Java.GradleJavaHome
-	if gradleJavaHome == "" {
+	if cfg == nil {
 		return nil
 	}
-	return map[string]any{
-		"settings": map[string]any{
-			"java": map[string]any{
-				"import": map[string]any{
-					"gradle": map[string]any{
-						"java": map[string]any{
-							"home": gradleJavaHome,
-						},
-					},
-				},
-			},
-		},
-	}
+	gradleJavaHome := cfg.LSP.Java.GradleJavaHome
+	return buildJDTLSInitOptions(gradleJavaHome, false)
 }
 
 func refsWorkspaceURI(workspaceRoot string) (lsp.DocumentURI, error) {

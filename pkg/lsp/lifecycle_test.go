@@ -1,3 +1,5 @@
+//go:build !windows
+
 package lsp
 
 import (
@@ -86,6 +88,13 @@ func TestLifecycleFirstStartCreatesProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("statePathForKey returned error: %v", err)
 	}
+	socketPath, err := lifecycle.socketPathForKey(lease.StateKey)
+	if err != nil {
+		t.Fatalf("socketPathForKey returned error: %v", err)
+	}
+	if lease.SocketPath != socketPath {
+		t.Fatalf("lease socket path = %q, want %q", lease.SocketPath, socketPath)
+	}
 
 	info, err := os.Stat(statePath)
 	if err != nil {
@@ -93,6 +102,13 @@ func TestLifecycleFirstStartCreatesProcess(t *testing.T) {
 	}
 	if info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("state file permissions = %#o, expected user-only permissions", info.Mode().Perm())
+	}
+	onDisk, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile returned error: %v", err)
+	}
+	if onDisk.SocketPath != socketPath {
+		t.Fatalf("state socket path = %q, want %q", onDisk.SocketPath, socketPath)
 	}
 
 	t.Cleanup(func() {
@@ -346,14 +362,124 @@ func TestLifecycleRecoversStalePIDState(t *testing.T) {
 	if onDisk.PID != lease.PID {
 		t.Fatalf("state PID = %d, want %d", onDisk.PID, lease.PID)
 	}
+	if onDisk.SocketPath == "" {
+		t.Fatal("state socket path should be populated")
+	}
 
 	t.Cleanup(func() {
 		_ = lifecycle.Stop(workspace, "go")
 	})
 }
 
-func TestLifecycleDeferredRefsCommandIntegration(t *testing.T) {
-	t.Skip("blocked by TK-006: refs command integration not wired")
+func TestLifecycleRecoversCorruptStateFile(t *testing.T) {
+	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
+	workspace := t.TempDir()
+
+	workspaceAbs, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatalf("filepath.Abs returned error: %v", err)
+	}
+	stateKey := StateKey(workspaceAbs, "go")
+
+	statePath, err := lifecycle.statePathForKey(stateKey)
+	if err != nil {
+		t.Fatalf("statePathForKey returned error: %v", err)
+	}
+	socketPath, err := lifecycle.socketPathForKey(stateKey)
+	if err != nil {
+		t.Fatalf("socketPathForKey returned error: %v", err)
+	}
+
+	if err := os.WriteFile(statePath, []byte("{corrupt"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile statePath returned error: %v", err)
+	}
+	if err := os.WriteFile(socketPath, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile socketPath returned error: %v", err)
+	}
+
+	lease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	if lease.Reused {
+		t.Fatal("corrupt state should not be reused")
+	}
+	if lease.SocketPath != socketPath {
+		t.Fatalf("lease socket path = %q, want %q", lease.SocketPath, socketPath)
+	}
+	if !waitForProcessAlive(lease.PID, time.Second) {
+		t.Fatalf("process %d did not become alive", lease.PID)
+	}
+
+	socketInfo, err := os.Stat(socketPath)
+	if err != nil {
+		t.Fatalf("expected daemon socket to exist after recovery, got err: %v", err)
+	}
+	if socketInfo.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("expected daemon socket path to be a socket, mode = %v", socketInfo.Mode())
+	}
+
+	onDisk, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile returned error: %v", err)
+	}
+	if onDisk.PID != lease.PID {
+		t.Fatalf("state PID = %d, want %d", onDisk.PID, lease.PID)
+	}
+	if onDisk.SocketPath != socketPath {
+		t.Fatalf("state socket path = %q, want %q", onDisk.SocketPath, socketPath)
+	}
+
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
+}
+
+func TestLifecycleEnsureReuseRefreshesLastUsedTimestamp(t *testing.T) {
+	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
+	workspace := t.TempDir()
+
+	first, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("first Ensure returned error: %v", err)
+	}
+	statePath, err := lifecycle.statePathForKey(first.StateKey)
+	if err != nil {
+		t.Fatalf("statePathForKey returned error: %v", err)
+	}
+	firstState, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile after first Ensure returned error: %v", err)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+
+	second, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("second Ensure returned error: %v", err)
+	}
+	if !second.Reused {
+		t.Fatal("second Ensure should mark lease as reused")
+	}
+	if second.PID != first.PID {
+		t.Fatalf("second PID = %d, want reused PID %d", second.PID, first.PID)
+	}
+
+	secondState, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile after second Ensure returned error: %v", err)
+	}
+	if secondState.LastUsedUnixNano <= firstState.LastUsedUnixNano {
+		t.Fatalf(
+			"last used timestamp did not increase on reuse: first=%d second=%d",
+			firstState.LastUsedUnixNano,
+			secondState.LastUsedUnixNano,
+		)
+	}
+
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
 }
 
 func TestLifecycleHelperProcess(t *testing.T) {
@@ -373,7 +499,13 @@ func newTestLifecycle(t *testing.T, idleTimeout time.Duration) *Lifecycle {
 	if err != nil {
 		t.Fatalf("os.Executable returned error: %v", err)
 	}
-	stateDir := t.TempDir()
+	stateDir, err := os.MkdirTemp("", "cslsp-state-")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(stateDir)
+	})
 
 	registry := NewRegistryFromEntries(map[string]ServerSpec{
 		"go": {

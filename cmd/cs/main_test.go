@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -214,10 +216,147 @@ func TestRootCommandIncludesExtractAndExistingCommands(t *testing.T) {
 		subcommands[cmd.Name()] = true
 	}
 
-	for _, want := range []string{"index", "search", "status", "clear", "extract", "refs", "callers", "implements"} {
+	for _, want := range []string{"index", "search", "status", "clear", "extract", "refs", "callers", "implements", "warmup"} {
 		if !subcommands[want] {
 			t.Fatalf("root command is missing %q subcommand", want)
 		}
+	}
+}
+
+func TestExecuteIndexWarmupDisabledSkipsDetection(t *testing.T) {
+	cfg := configpkg.Defaults()
+	cfg.Index.WarmLSP = false
+
+	detectCalls := 0
+	previousDetect := detectIndexWarmupLanguage
+	detectIndexWarmupLanguage = func(_ string, _ *lsp.Registry) (string, error) {
+		detectCalls++
+		return "java", nil
+	}
+	t.Cleanup(func() {
+		detectIndexWarmupLanguage = previousDetect
+	})
+
+	if err := executeIndexWarmup(context.Background(), cfg, t.TempDir()); err != nil {
+		t.Fatalf("executeIndexWarmup returned error: %v", err)
+	}
+	if detectCalls != 0 {
+		t.Fatalf("detectIndexWarmupLanguage calls = %d, want 0 when warmup is disabled", detectCalls)
+	}
+}
+
+func TestExecuteIndexWarmupEnabledJavaTriggersWarmup(t *testing.T) {
+	cfg := configpkg.Defaults()
+	cfg.Index.WarmLSP = true
+	workspace := t.TempDir()
+
+	previousDetect := detectIndexWarmupLanguage
+	detectIndexWarmupLanguage = func(gotWorkspace string, registry *lsp.Registry) (string, error) {
+		if gotWorkspace != workspace {
+			t.Fatalf("detect workspace = %q, want %q", gotWorkspace, workspace)
+		}
+		if registry == nil {
+			t.Fatal("detect registry is nil")
+		}
+		return "java", nil
+	}
+	t.Cleanup(func() {
+		detectIndexWarmupLanguage = previousDetect
+	})
+
+	calls := 0
+	previousWarmup := runWorkspaceLSPWarmup
+	runWorkspaceLSPWarmup = func(_ context.Context, gotWorkspace, gotLanguage string) error {
+		calls++
+		if gotWorkspace != workspace {
+			t.Fatalf("warmup workspace = %q, want %q", gotWorkspace, workspace)
+		}
+		if gotLanguage != "java" {
+			t.Fatalf("warmup language = %q, want %q", gotLanguage, "java")
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		runWorkspaceLSPWarmup = previousWarmup
+	})
+
+	if err := executeIndexWarmup(context.Background(), cfg, workspace); err != nil {
+		t.Fatalf("executeIndexWarmup returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("runWorkspaceLSPWarmup calls = %d, want 1", calls)
+	}
+}
+
+func TestExecuteIndexWarmupEnabledNonJavaSkipsWarmup(t *testing.T) {
+	cfg := configpkg.Defaults()
+	cfg.Index.WarmLSP = true
+
+	previousDetect := detectIndexWarmupLanguage
+	detectIndexWarmupLanguage = func(_ string, _ *lsp.Registry) (string, error) {
+		return "go", nil
+	}
+	t.Cleanup(func() {
+		detectIndexWarmupLanguage = previousDetect
+	})
+
+	warmupCalls := 0
+	previousWarmup := runWorkspaceLSPWarmup
+	runWorkspaceLSPWarmup = func(context.Context, string, string) error {
+		warmupCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		runWorkspaceLSPWarmup = previousWarmup
+	})
+
+	if err := executeIndexWarmup(context.Background(), cfg, t.TempDir()); err != nil {
+		t.Fatalf("executeIndexWarmup returned error: %v", err)
+	}
+	if warmupCalls != 0 {
+		t.Fatalf("runWorkspaceLSPWarmup calls = %d, want 0 for non-java workspace", warmupCalls)
+	}
+}
+
+func TestStartIndexWarmupInBackgroundLogsWarningOnFailure(t *testing.T) {
+	cfg := configpkg.Defaults()
+	cfg.Index.WarmLSP = true
+
+	// Signal after the full goroutine body (including Warn log) completes,
+	// not just after the mock returns, to avoid a race on stderr.
+	goroutineDone := make(chan struct{})
+	previousIndexWarmup := runIndexWarmup
+	runIndexWarmup = func(_ context.Context, gotCfg *configpkg.Config, gotWorkspace string) error {
+		if gotCfg != cfg {
+			t.Fatalf("runIndexWarmup cfg pointer mismatch")
+		}
+		if gotWorkspace != "/repo" {
+			t.Fatalf("runIndexWarmup workspace = %q, want %q", gotWorkspace, "/repo")
+		}
+		return errors.New("boom")
+	}
+	t.Cleanup(func() {
+		runIndexWarmup = previousIndexWarmup
+	})
+
+	var stderr bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&stderr, &slog.HandlerOptions{}))
+
+	go func() {
+		defer close(goroutineDone)
+		if err := runIndexWarmup(context.Background(), cfg, "/repo"); err != nil && logger != nil {
+			logger.Warn("lsp warmup failed", "error", err)
+		}
+	}()
+
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background warmup to run")
+	}
+
+	if !strings.Contains(stderr.String(), "lsp warmup failed") {
+		t.Fatalf("stderr missing warmup warning: %q", stderr.String())
 	}
 }
 
@@ -444,6 +583,229 @@ func TestJdtlsDataDir_GitignoreNotOverwritten(t *testing.T) {
 	if string(content) != want {
 		t.Fatalf(".gitignore content = %q, want %q", string(content), want)
 	}
+}
+
+func TestJdtlsInitOptionsForWorkspaceFirstLaunchNoSuppression(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "build.gradle"), []byte("plugins { id 'java' }"), 0o600); err != nil {
+		t.Fatalf("WriteFile(build.gradle) returned error: %v", err)
+	}
+
+	cfg := configpkg.Defaults()
+	initOptions, err := jdtlsInitOptionsForWorkspace(workspace, cfg)
+	if err != nil {
+		t.Fatalf("jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+	if initOptions != nil {
+		if _, ok := gradleImportEnabledValue(initOptions); ok {
+			t.Fatalf("first launch should not set gradle import suppression: %#v", initOptions)
+		}
+	}
+}
+
+func TestJdtlsInitOptionsForWorkspaceUnchangedLaunchAddsSuppression(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "build.gradle"), []byte("plugins { id 'java' }"), 0o600); err != nil {
+		t.Fatalf("WriteFile(build.gradle) returned error: %v", err)
+	}
+
+	cfg := configpkg.Defaults()
+	if _, err := jdtlsInitOptionsForWorkspace(workspace, cfg); err != nil {
+		t.Fatalf("initial jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+
+	initOptions, err := jdtlsInitOptionsForWorkspace(workspace, cfg)
+	if err != nil {
+		t.Fatalf("second jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+
+	enabled, ok := gradleImportEnabledValue(initOptions)
+	if !ok {
+		t.Fatalf("expected suppression flag in init options: %#v", initOptions)
+	}
+	if enabled {
+		t.Fatalf("gradle import enabled = %t, want false", enabled)
+	}
+}
+
+func TestJdtlsInitOptionsForWorkspaceChangedLaunchRemovesSuppression(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
+
+	workspace := t.TempDir()
+	buildGradlePath := filepath.Join(workspace, "build.gradle")
+	if err := os.WriteFile(buildGradlePath, []byte("plugins { id 'java' }"), 0o600); err != nil {
+		t.Fatalf("WriteFile(build.gradle) returned error: %v", err)
+	}
+
+	cfg := configpkg.Defaults()
+	if _, err := jdtlsInitOptionsForWorkspace(workspace, cfg); err != nil {
+		t.Fatalf("initial jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+	if _, err := jdtlsInitOptionsForWorkspace(workspace, cfg); err != nil {
+		t.Fatalf("second jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+
+	if err := os.WriteFile(buildGradlePath, []byte("plugins { id 'java-library' }"), 0o600); err != nil {
+		t.Fatalf("WriteFile(build.gradle changed) returned error: %v", err)
+	}
+
+	initOptions, err := jdtlsInitOptionsForWorkspace(workspace, cfg)
+	if err != nil {
+		t.Fatalf("third jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+	if _, ok := gradleImportEnabledValue(initOptions); ok {
+		t.Fatalf("suppression flag should be removed after build change: %#v", initOptions)
+	}
+}
+
+func TestJdtlsInitOptionsForWorkspaceMergesJavaHomeAndSuppression(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "settings.gradle"), []byte("rootProject.name='demo'"), 0o600); err != nil {
+		t.Fatalf("WriteFile(settings.gradle) returned error: %v", err)
+	}
+
+	cfg := configpkg.Defaults()
+	cfg.LSP.Java.GradleJavaHome = "/opt/jdks/jdk-17"
+
+	if _, err := jdtlsInitOptionsForWorkspace(workspace, cfg); err != nil {
+		t.Fatalf("initial jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+
+	initOptions, err := jdtlsInitOptionsForWorkspace(workspace, cfg)
+	if err != nil {
+		t.Fatalf("second jdtlsInitOptionsForWorkspace returned error: %v", err)
+	}
+
+	enabled, ok := gradleImportEnabledValue(initOptions)
+	if !ok || enabled {
+		t.Fatalf("expected gradle.enabled=false in init options: %#v", initOptions)
+	}
+
+	home, ok := gradleJavaHomeValue(initOptions)
+	if !ok {
+		t.Fatalf("expected gradle.java.home in init options: %#v", initOptions)
+	}
+	if home != cfg.LSP.Java.GradleJavaHome {
+		t.Fatalf("gradle java home = %q, want %q", home, cfg.LSP.Java.GradleJavaHome)
+	}
+}
+
+func TestDetectJavaGradleBuildBaselineIgnoresPomXML(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "build.gradle"), []byte("plugins { id 'java' }"), 0o600); err != nil {
+		t.Fatalf("WriteFile(build.gradle) returned error: %v", err)
+	}
+	pomPath := filepath.Join(workspace, "pom.xml")
+	if err := os.WriteFile(pomPath, []byte("<project/>"), 0o600); err != nil {
+		t.Fatalf("WriteFile(pom.xml) returned error: %v", err)
+	}
+
+	first, err := detectJavaGradleBuildBaseline(workspace)
+	if err != nil {
+		t.Fatalf("detectJavaGradleBuildBaseline returned error: %v", err)
+	}
+
+	if err := os.WriteFile(pomPath, []byte("<project><name>changed</name></project>"), 0o600); err != nil {
+		t.Fatalf("WriteFile(pom.xml changed) returned error: %v", err)
+	}
+
+	second, err := detectJavaGradleBuildBaseline(workspace)
+	if err != nil {
+		t.Fatalf("detectJavaGradleBuildBaseline (second) returned error: %v", err)
+	}
+
+	if first.Fingerprint != second.Fingerprint {
+		t.Fatalf("pom.xml changes should not affect tracked baseline fingerprint: first=%q second=%q", first.Fingerprint, second.Fingerprint)
+	}
+}
+
+func gradleImportEnabledValue(initOptions map[string]any) (bool, bool) {
+	gradleOptions, ok := gradleOptions(initOptions)
+	if !ok {
+		return false, false
+	}
+	value, ok := gradleOptions["enabled"]
+	if !ok {
+		return false, false
+	}
+	enabled, ok := value.(bool)
+	if !ok {
+		return false, false
+	}
+	return enabled, true
+}
+
+func gradleJavaHomeValue(initOptions map[string]any) (string, bool) {
+	gradleOptions, ok := gradleOptions(initOptions)
+	if !ok {
+		return "", false
+	}
+	javaOptionsRaw, ok := gradleOptions["java"]
+	if !ok {
+		return "", false
+	}
+	javaOptions, ok := javaOptionsRaw.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	homeRaw, ok := javaOptions["home"]
+	if !ok {
+		return "", false
+	}
+	home, ok := homeRaw.(string)
+	if !ok {
+		return "", false
+	}
+	return home, true
+}
+
+func gradleOptions(initOptions map[string]any) (map[string]any, bool) {
+	if initOptions == nil {
+		return nil, false
+	}
+	settingsRaw, ok := initOptions["settings"]
+	if !ok {
+		return nil, false
+	}
+	settings, ok := settingsRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	javaRaw, ok := settings["java"]
+	if !ok {
+		return nil, false
+	}
+	javaOptions, ok := javaRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	importRaw, ok := javaOptions["import"]
+	if !ok {
+		return nil, false
+	}
+	importOptions, ok := importRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	gradleRaw, ok := importOptions["gradle"]
+	if !ok {
+		return nil, false
+	}
+	gradleOptions, ok := gradleRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return gradleOptions, true
 }
 
 func parseOllamaMaxInputCharsOverride() (int, error) {

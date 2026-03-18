@@ -46,6 +46,9 @@ func TestDefaults(t *testing.T) {
 	if len(cfg.LSP.Go.BuildFlags) != 0 {
 		t.Fatalf("LSP.Go.BuildFlags len = %d, want 0", len(cfg.LSP.Go.BuildFlags))
 	}
+	if cfg.LSP.Daemon.IdleTimeout != "10m" {
+		t.Fatalf("LSP.Daemon.IdleTimeout = %q, want %q", cfg.LSP.Daemon.IdleTimeout, "10m")
+	}
 	if cfg.Index.WarmLSP {
 		t.Fatal("Index.WarmLSP = true, want false")
 	}
@@ -179,6 +182,7 @@ model = "project-model"
 	t.Setenv("CODESIGHT_OLLAMA_MAX_INPUT_CHARS", "8192")
 	t.Setenv("CODESIGHT_STATE_DIR", "/tmp/codesight-state")
 	t.Setenv("CODESIGHT_GRADLE_JAVA_HOME", "/usr/lib/jvm/java-21")
+	t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "45s")
 
 	cfg, err := LoadConfig(projectDir)
 	if err != nil {
@@ -209,6 +213,9 @@ model = "project-model"
 	if cfg.LSP.Java.GradleJavaHome != "/usr/lib/jvm/java-21" {
 		t.Fatalf("LSP.Java.GradleJavaHome = %q, want env override", cfg.LSP.Java.GradleJavaHome)
 	}
+	if cfg.LSP.Daemon.IdleTimeout != "45s" {
+		t.Fatalf("LSP.Daemon.IdleTimeout = %q, want env override", cfg.LSP.Daemon.IdleTimeout)
+	}
 
 	if cfg.Provenance[keyDBType] != "CODESIGHT_DB_TYPE" {
 		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_DB_TYPE", keyDBType, cfg.Provenance[keyDBType])
@@ -218,6 +225,9 @@ model = "project-model"
 	}
 	if cfg.Provenance[keyEmbeddingMaxInput] != "CODESIGHT_OLLAMA_MAX_INPUT_CHARS" {
 		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_OLLAMA_MAX_INPUT_CHARS", keyEmbeddingMaxInput, cfg.Provenance[keyEmbeddingMaxInput])
+	}
+	if cfg.Provenance[keyLSPDaemonTimeout] != "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT" {
+		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", keyLSPDaemonTimeout, cfg.Provenance[keyLSPDaemonTimeout])
 	}
 }
 
@@ -424,6 +434,70 @@ timeout = "fast"
 	}
 }
 
+func TestLoadConfig_DaemonIdleTimeoutPrecedence(t *testing.T) {
+	homeDir := setHomeDir(t)
+	projectDir := t.TempDir()
+	clearConfigEnv(t)
+
+	writeFile(t, filepath.Join(homeDir, ".codesight", "config.toml"), `
+[lsp.daemon]
+idle_timeout = "2m"
+`)
+	writeFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+[lsp.daemon]
+idle_timeout = "30s"
+`)
+	t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "15s")
+
+	cfg, err := LoadConfig(projectDir)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if cfg.LSP.Daemon.IdleTimeout != "15s" {
+		t.Fatalf("LSP.Daemon.IdleTimeout = %q, want env override", cfg.LSP.Daemon.IdleTimeout)
+	}
+	if cfg.Provenance[keyLSPDaemonTimeout] != "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT" {
+		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", keyLSPDaemonTimeout, cfg.Provenance[keyLSPDaemonTimeout])
+	}
+}
+
+func TestLoadConfig_InvalidDaemonIdleTimeout(t *testing.T) {
+	t.Run("invalid project value", func(t *testing.T) {
+		_ = setHomeDir(t)
+		projectDir := t.TempDir()
+		clearConfigEnv(t)
+
+		writeFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+[lsp.daemon]
+idle_timeout = "soon"
+`)
+
+		_, err := LoadConfig(projectDir)
+		if err == nil {
+			t.Fatal("LoadConfig error = nil, want timeout parse error")
+		}
+		if !strings.Contains(err.Error(), `invalid lsp.daemon.idle_timeout`) {
+			t.Fatalf("LoadConfig error = %v, want invalid lsp.daemon.idle_timeout", err)
+		}
+	})
+
+	t.Run("invalid env value", func(t *testing.T) {
+		_ = setHomeDir(t)
+		projectDir := t.TempDir()
+		clearConfigEnv(t)
+		t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "0")
+
+		_, err := LoadConfig(projectDir)
+		if err == nil {
+			t.Fatal("LoadConfig error = nil, want timeout parse error")
+		}
+		if !strings.Contains(err.Error(), `invalid lsp.daemon.idle_timeout`) {
+			t.Fatalf("LoadConfig error = %v, want invalid lsp.daemon.idle_timeout", err)
+		}
+	})
+}
+
 func expectDefaults(t *testing.T, cfg *Config) {
 	t.Helper()
 	defaults := Defaults()
@@ -449,6 +523,9 @@ func expectDefaults(t *testing.T, cfg *Config) {
 	if len(cfg.LSP.Go.BuildFlags) != len(defaults.LSP.Go.BuildFlags) {
 		t.Fatalf("len(LSP.Go.BuildFlags) = %d, want %d", len(cfg.LSP.Go.BuildFlags), len(defaults.LSP.Go.BuildFlags))
 	}
+	if cfg.LSP.Daemon.IdleTimeout != defaults.LSP.Daemon.IdleTimeout {
+		t.Fatalf("LSP.Daemon.IdleTimeout = %q, want %q", cfg.LSP.Daemon.IdleTimeout, defaults.LSP.Daemon.IdleTimeout)
+	}
 	if cfg.Index != defaults.Index {
 		t.Fatalf("Index = %#v, want %#v", cfg.Index, defaults.Index)
 	}
@@ -466,6 +543,7 @@ func clearConfigEnv(t *testing.T) {
 		envMaxInputChars,
 		envStateDir,
 		envGradleJavaHome,
+		envLSPDaemonTimeout,
 	}
 
 	previousValues := map[string]*string{}
