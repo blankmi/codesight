@@ -39,6 +39,13 @@ func buildConfigDisplayEntries(cfg *configpkg.Config) []configDisplayEntry {
 		cfg = configpkg.Defaults()
 	}
 
+	projectRootValue := cfg.ProjectRoot
+	if cfg.ConfigDir != "" {
+		if resolved, err := cfg.ResolvedProjectRoot(cfg.ConfigDir); err == nil {
+			projectRootValue = resolved
+		}
+	}
+
 	entries := []configDisplayEntry{
 		{Key: "db.address", Value: cfg.DB.Address, Source: configValueSource(cfg, "db.address")},
 		{Key: "db.token", Value: cfg.DB.Token, Source: configValueSource(cfg, "db.token")},
@@ -52,6 +59,7 @@ func buildConfigDisplayEntries(cfg *configpkg.Config) []configDisplayEntry {
 		{Key: "lsp.java.args", Value: strings.Join(cfg.LSP.Java.Args, ","), Source: configValueSource(cfg, "lsp.java.args")},
 		{Key: "lsp.java.gradle_java_home", Value: cfg.LSP.Java.GradleJavaHome, Source: configValueSource(cfg, "lsp.java.gradle_java_home")},
 		{Key: "lsp.java.timeout", Value: cfg.LSP.Java.Timeout, Source: configValueSource(cfg, "lsp.java.timeout")},
+		{Key: "project_root", Value: projectRootValue, Source: configValueSource(cfg, "project_root")},
 		{Key: "state_dir", Value: cfg.StateDir, Source: configValueSource(cfg, "state_dir")},
 	}
 

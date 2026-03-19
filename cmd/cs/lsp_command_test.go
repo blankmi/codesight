@@ -19,6 +19,7 @@ import (
 
 func TestWarmupCommandSuccessOutputContract(t *testing.T) {
 	workspace := t.TempDir()
+	writeTestFile(t, filepath.Join(workspace, ".codesight", "config.toml"), "")
 	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatalf("write workspace file: %v", err)
 	}
@@ -81,6 +82,7 @@ func TestWarmupCommandSuccessOutputContract(t *testing.T) {
 
 func TestWarmupCommandUnsupportedLanguageOutputContract(t *testing.T) {
 	workspace := t.TempDir()
+	writeTestFile(t, filepath.Join(workspace, ".codesight", "config.toml"), "")
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# sample\n"), 0o600); err != nil {
 		t.Fatalf("write workspace file: %v", err)
 	}
@@ -115,6 +117,7 @@ func TestWarmupCommandProbeEmptySymbolsTimesOut(t *testing.T) {
 	})
 
 	workspace := t.TempDir()
+	writeTestFile(t, filepath.Join(workspace, ".codesight", "config.toml"), "")
 	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte("package sample\n"), 0o600); err != nil {
 		t.Fatalf("write workspace file: %v", err)
 	}

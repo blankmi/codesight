@@ -43,6 +43,7 @@ func TestCallersCommandPassesThroughOutputAndParsedInputs(t *testing.T) {
 	})
 
 	workspace := t.TempDir()
+	writeTestFile(t, filepath.Join(workspace, ".codesight", "config.toml"), "")
 	stdout, _, err := executeCallersRootCommand(
 		t,
 		"callers",

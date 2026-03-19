@@ -613,12 +613,7 @@ func runRefs(cmd *cobra.Command, args []string) error {
 	}
 	absTarget = filepath.Clean(absTarget)
 
-	workspaceRoot := findProjectRoot(absTarget)
-	absRoot, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return err
-	}
-	absRoot = filepath.Clean(absRoot)
+	absRoot := resolvedProjectRoot()
 
 	output, err := runRefsCommand(cmd.Context(), refsCommandOptions{
 		WorkspaceRoot: absRoot,
@@ -659,12 +654,7 @@ func runCallers(cmd *cobra.Command, args []string) error {
 	}
 	absTarget = filepath.Clean(absTarget)
 
-	workspaceRoot := findProjectRoot(absTarget)
-	absRoot, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return err
-	}
-	absRoot = filepath.Clean(absRoot)
+	absRoot := resolvedProjectRoot()
 
 	output, err := runCallersCommand(cmd.Context(), callersCommandOptions{
 		WorkspaceRoot: absRoot,
@@ -698,12 +688,7 @@ func runImplements(cmd *cobra.Command, args []string) error {
 	}
 	absTarget = filepath.Clean(absTarget)
 
-	workspaceRoot := findProjectRoot(absTarget)
-	absRoot, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return err
-	}
-	absRoot = filepath.Clean(absRoot)
+	absRoot := resolvedProjectRoot()
 
 	output, err := runImplementsCommand(cmd.Context(), implementsCommandOptions{
 		WorkspaceRoot: absRoot,
@@ -746,48 +731,18 @@ func resolveRefsWorkspaceRoot(pathFlag string) (string, error) {
 	return absPath, nil
 }
 
-func findProjectRoot(path string) string {
-	markers := []string{
-		".codesight",
-		".csignore",
-		"settings.gradle.kts",
-		"settings.gradle",
-		"build.gradle.kts",
-		"build.gradle",
-		"pom.xml",
-		"go.mod",
-		"package.json",
-		"Cargo.toml",
+func resolvedProjectRoot() string {
+	cfg := currentConfig()
+	if cfg.ConfigDir != "" {
+		if root, err := cfg.ResolvedProjectRoot(cfg.ConfigDir); err == nil {
+			return root
+		}
 	}
-
-	curr := path
-	bestRoot := path
-	for {
-		// Stop at Git root boundary.
-		if _, err := os.Stat(filepath.Join(curr, ".git")); err == nil {
-			return curr
-		}
-
-		foundMarker := false
-		for _, m := range markers {
-			if _, err := os.Stat(filepath.Join(curr, m)); err == nil {
-				foundMarker = true
-				break
-			}
-		}
-
-		if foundMarker {
-			bestRoot = curr
-		}
-
-		parent := filepath.Dir(curr)
-		if parent == curr {
-			break
-		}
-		curr = parent
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
 	}
-
-	return bestRoot
+	return wd
 }
 
 func startRefsLSPClient(

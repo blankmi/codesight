@@ -29,6 +29,7 @@ const (
 	envGradleJavaHome     = "CODESIGHT_GRADLE_JAVA_HOME"
 	envLSPDaemonTimeout        = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
 	envLSPWarmupProbeTimeout   = "CODESIGHT_LSP_DAEMON_WARMUP_PROBE_TIMEOUT"
+	envProjectRoot        = "CODESIGHT_PROJECT_ROOT"
 	defaultJavaTimeout    = "60s"
 	defaultDaemonTimeout  = "10m"
 	defaultDBType         = "milvus"
@@ -52,17 +53,20 @@ const (
 	keyLSPDaemonTimeout       = "lsp.daemon.idle_timeout"
 	keyLSPWarmupProbeTimeout  = "lsp.daemon.warmup_probe_timeout"
 	keyIndexWarmLSP      = "index.warm_lsp"
+	keyProjectRoot       = "project_root"
 )
 
 var warningWriter io.Writer = os.Stderr
 
 type Config struct {
-	DB         DBConfig          `toml:"db"`
-	Embedding  EmbeddingConfig   `toml:"embedding"`
-	StateDir   string            `toml:"state_dir"`
-	LSP        LSPConfig         `toml:"lsp"`
-	Index      IndexConfig       `toml:"index"`
-	Provenance map[string]string `toml:"-"`
+	DB          DBConfig          `toml:"db"`
+	Embedding   EmbeddingConfig   `toml:"embedding"`
+	StateDir    string            `toml:"state_dir"`
+	LSP         LSPConfig         `toml:"lsp"`
+	Index       IndexConfig       `toml:"index"`
+	ProjectRoot string            `toml:"project_root"`
+	ConfigDir   string            `toml:"-"`
+	Provenance  map[string]string `toml:"-"`
 }
 
 type DBConfig struct {
@@ -103,11 +107,12 @@ type IndexConfig struct {
 }
 
 type layerConfig struct {
-	DB        layerDBConfig        `toml:"db"`
-	Embedding layerEmbeddingConfig `toml:"embedding"`
-	StateDir  *string              `toml:"state_dir"`
-	LSP       layerLSPConfig       `toml:"lsp"`
-	Index     layerIndexConfig     `toml:"index"`
+	DB          layerDBConfig        `toml:"db"`
+	Embedding   layerEmbeddingConfig `toml:"embedding"`
+	StateDir    *string              `toml:"state_dir"`
+	LSP         layerLSPConfig       `toml:"lsp"`
+	Index       layerIndexConfig     `toml:"index"`
+	ProjectRoot *string              `toml:"project_root"`
 }
 
 type layerDBConfig struct {
@@ -197,12 +202,16 @@ func LoadConfig(projectPath string) (*Config, error) {
 		return nil, err
 	}
 
-	projectConfigPath, err := projectConfigPath(projectPath)
+	projConfigPath, err := projectConfigPath(projectPath)
 	if err != nil {
 		return nil, err
 	}
-	if err := applyConfigFile(cfg, projectConfigPath, projectConfigSource); err != nil {
+	if err := applyConfigFile(cfg, projConfigPath, projectConfigSource); err != nil {
 		return nil, err
+	}
+
+	if _, statErr := os.Stat(projConfigPath); statErr == nil {
+		cfg.ConfigDir = filepath.Dir(projConfigPath)
 	}
 
 	if err := applyEnv(cfg); err != nil {
@@ -256,11 +265,12 @@ func applyConfigFile(cfg *Config, path string, source string) error {
 
 func warnUnknownKeys(metadata toml.MetaData, source string) {
 	knownTopLevel := map[string]struct{}{
-		"db":        {},
-		"embedding": {},
-		"state_dir": {},
-		"lsp":       {},
-		"index":     {},
+		"db":           {},
+		"embedding":    {},
+		"state_dir":    {},
+		"lsp":          {},
+		"index":        {},
+		"project_root": {},
 	}
 
 	seenTopLevelWarnings := map[string]struct{}{}
@@ -362,6 +372,11 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 		cfg.Provenance[keyIndexWarmLSP] = source
 	}
 
+	if layer.ProjectRoot != nil {
+		cfg.ProjectRoot = *layer.ProjectRoot
+		cfg.Provenance[keyProjectRoot] = source
+	}
+
 	return nil
 }
 
@@ -430,6 +445,11 @@ func applyEnv(cfg *Config) error {
 		}
 	}
 
+	if value, ok := os.LookupEnv(envProjectRoot); ok && value != "" {
+		cfg.ProjectRoot = value
+		cfg.Provenance[keyProjectRoot] = envProjectRoot
+	}
+
 	return nil
 }
 
@@ -458,6 +478,7 @@ func allConfigKeys() []string {
 		keyLSPDaemonTimeout,
 		keyLSPWarmupProbeTimeout,
 		keyIndexWarmLSP,
+		keyProjectRoot,
 	}
 }
 
@@ -488,6 +509,52 @@ func parsePositiveDuration(raw string, key string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid %s %q: must be > 0", key, raw)
 	}
 	return parsed, nil
+}
+
+func (cfg *Config) ResolvedProjectRoot(configDir string) (string, error) {
+	raw := cfg.ProjectRoot
+	if raw == "" {
+		if configDir == "" {
+			return "", fmt.Errorf("no project root configured and no .codesight directory found")
+		}
+		resolved, err := filepath.Abs(filepath.Dir(configDir))
+		if err != nil {
+			return "", fmt.Errorf("resolve default project root: %w", err)
+		}
+		return resolved, nil
+	}
+
+	// Env var values are already absolute.
+	if cfg.Provenance[keyProjectRoot] == envProjectRoot {
+		abs, err := filepath.Abs(raw)
+		if err != nil {
+			return "", fmt.Errorf("resolve project root: %w", err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return "", fmt.Errorf("project root %q does not exist: %w", abs, err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("project root %q is not a directory", abs)
+		}
+		return abs, nil
+	}
+
+	if configDir == "" {
+		return "", fmt.Errorf("project_root is set but no .codesight directory found to resolve it against")
+	}
+	abs, err := filepath.Abs(filepath.Join(configDir, raw))
+	if err != nil {
+		return "", fmt.Errorf("resolve project root: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("project root %q does not exist: %w", abs, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("project root %q is not a directory", abs)
+	}
+	return abs, nil
 }
 
 func warnf(format string, args ...any) {

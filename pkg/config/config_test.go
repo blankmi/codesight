@@ -498,6 +498,151 @@ idle_timeout = "soon"
 	})
 }
 
+func TestResolvedProjectRoot_EmptyValueReturnsParentOfConfigDir(t *testing.T) {
+	projectDir := t.TempDir()
+	configDir := filepath.Join(projectDir, ".codesight")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	cfg := Defaults()
+	got, err := cfg.ResolvedProjectRoot(configDir)
+	if err != nil {
+		t.Fatalf("ResolvedProjectRoot returned error: %v", err)
+	}
+	want, _ := filepath.Abs(projectDir)
+	if got != want {
+		t.Fatalf("ResolvedProjectRoot() = %q, want %q", got, want)
+	}
+}
+
+func TestResolvedProjectRoot_RelativePath(t *testing.T) {
+	projectDir := t.TempDir()
+	configDir := filepath.Join(projectDir, ".codesight")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	cfg := Defaults()
+	cfg.ProjectRoot = ".."
+	cfg.Provenance[keyProjectRoot] = projectConfigSource
+
+	got, err := cfg.ResolvedProjectRoot(configDir)
+	if err != nil {
+		t.Fatalf("ResolvedProjectRoot returned error: %v", err)
+	}
+	want, _ := filepath.Abs(projectDir)
+	if got != want {
+		t.Fatalf("ResolvedProjectRoot() = %q, want %q", got, want)
+	}
+}
+
+func TestResolvedProjectRoot_InvalidPathReturnsError(t *testing.T) {
+	projectDir := t.TempDir()
+	configDir := filepath.Join(projectDir, ".codesight")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	cfg := Defaults()
+	cfg.ProjectRoot = "../nonexistent-dir-12345"
+	cfg.Provenance[keyProjectRoot] = projectConfigSource
+
+	_, err := cfg.ResolvedProjectRoot(configDir)
+	if err == nil {
+		t.Fatal("ResolvedProjectRoot error = nil, want error for nonexistent path")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("ResolvedProjectRoot error = %v, want 'does not exist'", err)
+	}
+}
+
+func TestResolvedProjectRoot_NoConfigDirReturnsError(t *testing.T) {
+	cfg := Defaults()
+	_, err := cfg.ResolvedProjectRoot("")
+	if err == nil {
+		t.Fatal("ResolvedProjectRoot error = nil, want error for empty configDir")
+	}
+}
+
+func TestLoadConfig_SetsConfigDir(t *testing.T) {
+	_ = setHomeDir(t)
+	projectDir := t.TempDir()
+	clearConfigEnv(t)
+
+	writeFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+[embedding]
+model = "test"
+`)
+
+	cfg, err := LoadConfig(projectDir)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	wantConfigDir := filepath.Join(projectDir, ".codesight")
+	if cfg.ConfigDir != wantConfigDir {
+		t.Fatalf("ConfigDir = %q, want %q", cfg.ConfigDir, wantConfigDir)
+	}
+}
+
+func TestLoadConfig_NoProjectConfigLeavesConfigDirEmpty(t *testing.T) {
+	_ = setHomeDir(t)
+	projectDir := t.TempDir()
+	clearConfigEnv(t)
+
+	cfg, err := LoadConfig(projectDir)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if cfg.ConfigDir != "" {
+		t.Fatalf("ConfigDir = %q, want empty", cfg.ConfigDir)
+	}
+}
+
+func TestLoadConfig_ProjectRootFromConfig(t *testing.T) {
+	_ = setHomeDir(t)
+	projectDir := t.TempDir()
+	clearConfigEnv(t)
+
+	writeFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+project_root = ".."
+`)
+
+	cfg, err := LoadConfig(projectDir)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if cfg.ProjectRoot != ".." {
+		t.Fatalf("ProjectRoot = %q, want %q", cfg.ProjectRoot, "..")
+	}
+	if cfg.Provenance[keyProjectRoot] != projectConfigSource {
+		t.Fatalf("Provenance[%q] = %q, want %q", keyProjectRoot, cfg.Provenance[keyProjectRoot], projectConfigSource)
+	}
+}
+
+func TestLoadConfig_ProjectRootFromEnv(t *testing.T) {
+	_ = setHomeDir(t)
+	projectDir := t.TempDir()
+	clearConfigEnv(t)
+
+	t.Setenv("CODESIGHT_PROJECT_ROOT", "/tmp/override-root")
+
+	cfg, err := LoadConfig(projectDir)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if cfg.ProjectRoot != "/tmp/override-root" {
+		t.Fatalf("ProjectRoot = %q, want %q", cfg.ProjectRoot, "/tmp/override-root")
+	}
+	if cfg.Provenance[keyProjectRoot] != "CODESIGHT_PROJECT_ROOT" {
+		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_PROJECT_ROOT", keyProjectRoot, cfg.Provenance[keyProjectRoot])
+	}
+}
+
 func expectDefaults(t *testing.T, cfg *Config) {
 	t.Helper()
 	defaults := Defaults()
@@ -544,6 +689,7 @@ func clearConfigEnv(t *testing.T) {
 		envStateDir,
 		envGradleJavaHome,
 		envLSPDaemonTimeout,
+		envProjectRoot,
 	}
 
 	previousValues := map[string]*string{}

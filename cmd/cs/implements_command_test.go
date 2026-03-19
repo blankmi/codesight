@@ -32,6 +32,7 @@ func TestImplementsCommandPassesThroughOutputAndParsedInputs(t *testing.T) {
 	})
 
 	workspace := t.TempDir()
+	writeTestFile(t, filepath.Join(workspace, ".codesight", "config.toml"), "")
 	stdout, _, err := executeImplementsRootCommand(
 		t,
 		"implements",

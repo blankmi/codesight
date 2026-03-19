@@ -136,6 +136,9 @@ func renderInitConfigTemplate(detected projectTypeDetection) string {
 	b.WriteString("# Codesight project configuration.\n")
 	b.WriteString("# Environment variables (CODESIGHT_*) override these values.\n\n")
 
+	b.WriteString("# Project root relative to this directory (default: parent of .codesight/).\n")
+	b.WriteString("# project_root = \"..\"\n\n")
+
 	b.WriteString("[embedding]\n")
 	b.WriteString("# Embedding model used for semantic indexing and search.\n")
 	b.WriteString(fmt.Sprintf("model = %q\n", defaultModel))

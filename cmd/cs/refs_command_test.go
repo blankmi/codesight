@@ -41,6 +41,7 @@ func TestRefsCommandPassesThroughOutputAndNormalizedInputs(t *testing.T) {
 	})
 
 	tempDir := t.TempDir()
+	writeTestFile(t, filepath.Join(tempDir, ".codesight", "config.toml"), "")
 	stdout, _, err := executeRefsRootCommand(
 		t,
 		"refs",

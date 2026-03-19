@@ -32,6 +32,7 @@ func clearTestEnv(t *testing.T) {
 		"CODESIGHT_OLLAMA_MAX_INPUT_CHARS",
 		"CODESIGHT_STATE_DIR",
 		"CODESIGHT_GRADLE_JAVA_HOME",
+		"CODESIGHT_PROJECT_ROOT",
 	}
 
 	previousValues := map[string]*string{}
