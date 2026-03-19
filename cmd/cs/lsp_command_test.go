@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -235,7 +236,10 @@ func readTestLSPMessage(reader *bufio.Reader) ([]byte, error) {
 		}
 		if strings.HasPrefix(strings.ToLower(trimmed), "content-length:") {
 			val := strings.TrimSpace(strings.SplitN(trimmed, ":", 2)[1])
-			fmt.Sscanf(val, "%d", &contentLength)
+			contentLength, err = strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf("parse content-length %q: %w", val, err)
+			}
 		}
 	}
 	if contentLength < 0 {

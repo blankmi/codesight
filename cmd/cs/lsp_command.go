@@ -59,20 +59,8 @@ type warmupCommandResult struct {
 	Restarted     bool
 }
 
-func resolveLSPSubcommandWorkspace(args []string) (string, error) {
-	path := ""
-	if len(args) > 0 {
-		path = args[0]
-	}
-	return resolveRefsWorkspaceRoot(path)
-}
-
 func runLSPWarmup(cmd *cobra.Command, args []string) error {
-	workspaceRoot, err := resolveLSPSubcommandWorkspace(args)
-	if err != nil {
-		return err
-	}
-	workspaceRoot = resolvedProjectRoot()
+	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
 
 	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
 		WorkspaceRoot: workspaceRoot,
@@ -96,11 +84,7 @@ func runLSPWarmup(cmd *cobra.Command, args []string) error {
 }
 
 func runLSPStatus(cmd *cobra.Command, args []string) error {
-	workspaceRoot, err := resolveLSPSubcommandWorkspace(args)
-	if err != nil {
-		return err
-	}
-	workspaceRoot = resolvedProjectRoot()
+	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
 
 	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
 		WorkspaceRoot: workspaceRoot,
@@ -132,11 +116,7 @@ func runLSPStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runLSPRestart(cmd *cobra.Command, args []string) error {
-	workspaceRoot, err := resolveLSPSubcommandWorkspace(args)
-	if err != nil {
-		return err
-	}
-	workspaceRoot = resolvedProjectRoot()
+	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
 
 	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
 		WorkspaceRoot: workspaceRoot,

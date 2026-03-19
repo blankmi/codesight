@@ -14,46 +14,47 @@ import (
 )
 
 const (
-	userConfigSource    = "~/.codesight/config.toml"
-	projectConfigSource = ".codesight/config.toml"
+	userConfigSource              = "~/.codesight/config.toml"
+	projectConfigSource           = ".codesight/config.toml"
+	maxProjectConfigSearchParents = 12
 )
 
 const (
-	envDBType             = "CODESIGHT_DB_TYPE"
-	envDBAddress          = "CODESIGHT_DB_ADDRESS"
-	envDBToken            = "CODESIGHT_DB_TOKEN"
-	envOllamaHost         = "CODESIGHT_OLLAMA_HOST"
-	envEmbeddingModel     = "CODESIGHT_EMBEDDING_MODEL"
-	envMaxInputChars      = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
-	envStateDir           = "CODESIGHT_STATE_DIR"
-	envGradleJavaHome     = "CODESIGHT_GRADLE_JAVA_HOME"
-	envLSPDaemonTimeout        = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
-	envLSPWarmupProbeTimeout   = "CODESIGHT_LSP_DAEMON_WARMUP_PROBE_TIMEOUT"
-	envProjectRoot        = "CODESIGHT_PROJECT_ROOT"
-	defaultJavaTimeout    = "60s"
-	defaultDaemonTimeout  = "10m"
-	defaultDBType         = "milvus"
-	defaultDBAddress      = "localhost:19530"
-	defaultOllamaHost     = "http://127.0.0.1:11434"
-	defaultEmbeddingModel = "nomic-embed-text"
+	envDBType                = "CODESIGHT_DB_TYPE"
+	envDBAddress             = "CODESIGHT_DB_ADDRESS"
+	envDBToken               = "CODESIGHT_DB_TOKEN"
+	envOllamaHost            = "CODESIGHT_OLLAMA_HOST"
+	envEmbeddingModel        = "CODESIGHT_EMBEDDING_MODEL"
+	envMaxInputChars         = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
+	envStateDir              = "CODESIGHT_STATE_DIR"
+	envGradleJavaHome        = "CODESIGHT_GRADLE_JAVA_HOME"
+	envLSPDaemonTimeout      = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
+	envLSPWarmupProbeTimeout = "CODESIGHT_LSP_DAEMON_WARMUP_PROBE_TIMEOUT"
+	envProjectRoot           = "CODESIGHT_PROJECT_ROOT"
+	defaultJavaTimeout       = "60s"
+	defaultDaemonTimeout     = "10m"
+	defaultDBType            = "milvus"
+	defaultDBAddress         = "localhost:19530"
+	defaultOllamaHost        = "http://127.0.0.1:11434"
+	defaultEmbeddingModel    = "nomic-embed-text"
 )
 
 const (
-	keyDBType            = "db.type"
-	keyDBAddress         = "db.address"
-	keyDBToken           = "db.token"
-	keyEmbeddingOllama   = "embedding.ollama_host"
-	keyEmbeddingModel    = "embedding.model"
-	keyEmbeddingMaxInput = "embedding.max_input_chars"
-	keyStateDir          = "state_dir"
-	keyLSPJavaGradleHome = "lsp.java.gradle_java_home"
-	keyLSPJavaTimeout    = "lsp.java.timeout"
-	keyLSPJavaArgs       = "lsp.java.args"
-	keyLSPGoBuildFlags   = "lsp.go.build_flags"
-	keyLSPDaemonTimeout       = "lsp.daemon.idle_timeout"
-	keyLSPWarmupProbeTimeout  = "lsp.daemon.warmup_probe_timeout"
-	keyIndexWarmLSP      = "index.warm_lsp"
-	keyProjectRoot       = "project_root"
+	keyDBType                = "db.type"
+	keyDBAddress             = "db.address"
+	keyDBToken               = "db.token"
+	keyEmbeddingOllama       = "embedding.ollama_host"
+	keyEmbeddingModel        = "embedding.model"
+	keyEmbeddingMaxInput     = "embedding.max_input_chars"
+	keyStateDir              = "state_dir"
+	keyLSPJavaGradleHome     = "lsp.java.gradle_java_home"
+	keyLSPJavaTimeout        = "lsp.java.timeout"
+	keyLSPJavaArgs           = "lsp.java.args"
+	keyLSPGoBuildFlags       = "lsp.go.build_flags"
+	keyLSPDaemonTimeout      = "lsp.daemon.idle_timeout"
+	keyLSPWarmupProbeTimeout = "lsp.daemon.warmup_probe_timeout"
+	keyIndexWarmLSP          = "index.warm_lsp"
+	keyProjectRoot           = "project_root"
 )
 
 var warningWriter io.Writer = os.Stderr
@@ -206,11 +207,10 @@ func LoadConfig(projectPath string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := applyConfigFile(cfg, projConfigPath, projectConfigSource); err != nil {
-		return nil, err
-	}
-
-	if _, statErr := os.Stat(projConfigPath); statErr == nil {
+	if projConfigPath != "" {
+		if err := applyConfigFile(cfg, projConfigPath, projectConfigSource); err != nil {
+			return nil, err
+		}
 		cfg.ConfigDir = filepath.Dir(projConfigPath)
 	}
 
@@ -230,14 +230,104 @@ func userConfigPath() (string, error) {
 }
 
 func projectConfigPath(projectPath string) (string, error) {
-	if projectPath == "" {
-		projectPath = "."
+	startDir, err := resolveProjectConfigStartDir(projectPath)
+	if err != nil {
+		return "", err
 	}
-	absProjectPath, err := filepath.Abs(projectPath)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	} else if absHome, absErr := filepath.Abs(homeDir); absErr == nil {
+		homeDir = filepath.Clean(absHome)
+		if resolvedHome, resolveErr := filepath.EvalSymlinks(homeDir); resolveErr == nil {
+			homeDir = filepath.Clean(resolvedHome)
+		}
+	} else {
+		homeDir = ""
+	}
+
+	userCfgPath, err := userConfigPath()
+	if err != nil {
+		return "", err
+	}
+	if absUserCfgPath, absErr := filepath.Abs(userCfgPath); absErr == nil {
+		userCfgPath = filepath.Clean(absUserCfgPath)
+		if resolvedUserCfgPath, resolveErr := filepath.EvalSymlinks(userCfgPath); resolveErr == nil {
+			userCfgPath = filepath.Clean(resolvedUserCfgPath)
+		}
+	}
+
+	startWithinHome := homeDir != "" && pathWithinRoot(startDir, homeDir)
+
+	current := startDir
+	for parents := 0; ; parents++ {
+		candidate := filepath.Join(current, ".codesight", "config.toml")
+		if !sameCleanPath(candidate, userCfgPath) {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return "", err
+			}
+		}
+
+		gitPath := filepath.Join(current, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return "", nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+
+		if startWithinHome && sameCleanPath(current, homeDir) {
+			return "", nil
+		}
+		if !startWithinHome && parents >= maxProjectConfigSearchParents {
+			return "", nil
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", nil
+		}
+		current = parent
+	}
+}
+
+func resolveProjectConfigStartDir(projectPath string) (string, error) {
+	target := strings.TrimSpace(projectPath)
+	if target == "" {
+		target = "."
+	}
+
+	absProjectPath, err := filepath.Abs(target)
 	if err != nil {
 		return "", fmt.Errorf("resolve project path: %w", err)
 	}
-	return filepath.Join(absProjectPath, ".codesight", "config.toml"), nil
+	resolvedProjectPath, err := filepath.EvalSymlinks(absProjectPath)
+	if err == nil {
+		absProjectPath = resolvedProjectPath
+	}
+
+	info, err := os.Stat(absProjectPath)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		absProjectPath = filepath.Dir(absProjectPath)
+	}
+
+	return filepath.Clean(absProjectPath), nil
+}
+
+func sameCleanPath(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func pathWithinRoot(path, root string) bool {
+	if sameCleanPath(path, root) {
+		return true
+	}
+	return strings.HasPrefix(filepath.Clean(path), filepath.Clean(root)+string(filepath.Separator))
 }
 
 func applyConfigFile(cfg *Config, path string, source string) error {

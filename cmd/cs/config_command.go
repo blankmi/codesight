@@ -26,7 +26,8 @@ type configDisplayEntry struct {
 }
 
 func runConfig(cmd *cobra.Command, args []string) error {
-	for _, entry := range buildConfigDisplayEntries(currentConfig()) {
+	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
+	for _, entry := range buildConfigDisplayEntries(currentConfig(), workspaceRoot) {
 		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s = %s (%s)\n", entry.Key, entry.Value, entry.Source); err != nil {
 			return err
 		}
@@ -34,13 +35,16 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func buildConfigDisplayEntries(cfg *configpkg.Config) []configDisplayEntry {
+func buildConfigDisplayEntries(cfg *configpkg.Config, workspaceRoot string) []configDisplayEntry {
 	if cfg == nil {
 		cfg = configpkg.Defaults()
 	}
 
-	projectRootValue := cfg.ProjectRoot
-	if cfg.ConfigDir != "" {
+	projectRootValue := strings.TrimSpace(workspaceRoot)
+	if projectRootValue == "" {
+		projectRootValue = cfg.ProjectRoot
+	}
+	if projectRootValue == "" && cfg.ConfigDir != "" {
 		if resolved, err := cfg.ResolvedProjectRoot(cfg.ConfigDir); err == nil {
 			projectRootValue = resolved
 		}

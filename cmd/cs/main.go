@@ -46,6 +46,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if shouldSkipRuntimeConfigLoad(cmd) {
 			runtimeConfig = configpkg.Defaults()
+			runtimeTargetDir = ""
 			return nil
 		}
 		return loadRuntimeConfig(cmd, args)
@@ -212,16 +213,19 @@ func newLogger() *slog.Logger {
 }
 
 func loadRuntimeConfig(cmd *cobra.Command, args []string) error {
+	runtimeTargetDir = ""
+
 	projectPath, err := configProjectPath(cmd, args)
 	if err != nil {
 		return fmt.Errorf("resolve project path for config: %w", err)
 	}
 
-	cfg, err := configpkg.LoadConfig(projectPath)
+	cfg, err := runtimeConfigForTarget(projectPath)
 	if err != nil {
 		return err
 	}
 	runtimeConfig = cfg
+	runtimeTargetDir = projectPath
 	return nil
 }
 
@@ -240,35 +244,11 @@ func currentConfig() *configpkg.Config {
 }
 
 func configProjectPath(cmd *cobra.Command, args []string) (string, error) {
-	switch cmd.Name() {
-	case indexCmd.Name(), statusCmd.Name(), clearCmd.Name(), configCmd.Name():
-		if len(args) > 0 {
-			return args[0], nil
-		}
-		return ".", nil
-	case searchCmd.Name():
-		pathFlag, err := cmd.Flags().GetString("path")
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(pathFlag) == "" {
-			return ".", nil
-		}
-		return pathFlag, nil
-	case refsCmd.Name(), callersCmd.Name(), implementsCmd.Name():
-		pathFlag, err := cmd.Flags().GetString("path")
-		if err != nil {
-			return "", err
-		}
-		return resolveRefsWorkspaceRoot(pathFlag)
-	case lspWarmupCmd.Name(), lspStatusCmd.Name(), lspRestartCmd.Name():
-		if len(args) > 0 {
-			return resolveRefsWorkspaceRoot(args[0])
-		}
-		return resolveRefsWorkspaceRoot("")
-	default:
-		return ".", nil
+	path, err := commandTargetPath(cmd, args)
+	if err != nil {
+		return "", err
 	}
+	return resolveCommandTargetDir(path)
 }
 
 func newStore(cfg *configpkg.Config) (vectorstore.Store, error) {
@@ -610,10 +590,6 @@ func runExtract(cmd *cobra.Command, args []string) error {
 }
 
 func runRefs(cmd *cobra.Command, args []string) error {
-	pathFlag, err := cmd.Flags().GetString("path")
-	if err != nil {
-		return err
-	}
 	kindFlag, err := cmd.Flags().GetString("kind")
 	if err != nil {
 		return err
@@ -624,21 +600,12 @@ func runRefs(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	targetPath, err := resolveRefsWorkspaceRoot(pathFlag)
-	if err != nil {
-		return err
-	}
-	absTarget, err := filepath.Abs(targetPath)
-	if err != nil {
-		return err
-	}
-	absTarget = filepath.Clean(absTarget)
-
-	absRoot := resolvedProjectRoot()
+	targetDir := currentTargetDir()
+	workspaceRoot := resolvedProjectRootForTarget(targetDir)
 
 	output, err := runRefsCommand(cmd.Context(), refsCommandOptions{
-		WorkspaceRoot: absRoot,
-		FilterPath:    absTarget,
+		WorkspaceRoot: workspaceRoot,
+		FilterPath:    targetDir,
 		Symbol:        args[0],
 		Kind:          kind,
 	})
@@ -653,10 +620,6 @@ func runRefs(cmd *cobra.Command, args []string) error {
 }
 
 func runCallers(cmd *cobra.Command, args []string) error {
-	pathFlag, err := cmd.Flags().GetString("path")
-	if err != nil {
-		return err
-	}
 	depth, err := cmd.Flags().GetInt("depth")
 	if err != nil {
 		return err
@@ -665,21 +628,12 @@ func runCallers(cmd *cobra.Command, args []string) error {
 		return errors.New("depth must be a positive integer")
 	}
 
-	targetPath, err := resolveRefsWorkspaceRoot(pathFlag)
-	if err != nil {
-		return err
-	}
-	absTarget, err := filepath.Abs(targetPath)
-	if err != nil {
-		return err
-	}
-	absTarget = filepath.Clean(absTarget)
-
-	absRoot := resolvedProjectRoot()
+	targetDir := currentTargetDir()
+	workspaceRoot := resolvedProjectRootForTarget(targetDir)
 
 	output, err := runCallersCommand(cmd.Context(), callersCommandOptions{
-		WorkspaceRoot: absRoot,
-		FilterPath:    absTarget,
+		WorkspaceRoot: workspaceRoot,
+		FilterPath:    targetDir,
 		Symbol:        args[0],
 		Depth:         depth,
 	})
@@ -694,26 +648,12 @@ func runCallers(cmd *cobra.Command, args []string) error {
 }
 
 func runImplements(cmd *cobra.Command, args []string) error {
-	pathFlag, err := cmd.Flags().GetString("path")
-	if err != nil {
-		return err
-	}
-
-	targetPath, err := resolveRefsWorkspaceRoot(pathFlag)
-	if err != nil {
-		return err
-	}
-	absTarget, err := filepath.Abs(targetPath)
-	if err != nil {
-		return err
-	}
-	absTarget = filepath.Clean(absTarget)
-
-	absRoot := resolvedProjectRoot()
+	targetDir := currentTargetDir()
+	workspaceRoot := resolvedProjectRootForTarget(targetDir)
 
 	output, err := runImplementsCommand(cmd.Context(), implementsCommandOptions{
-		WorkspaceRoot: absRoot,
-		FilterPath:    absTarget,
+		WorkspaceRoot: workspaceRoot,
+		FilterPath:    targetDir,
 		Symbol:        args[0],
 	})
 	if err != nil {
@@ -727,43 +667,7 @@ func runImplements(cmd *cobra.Command, args []string) error {
 }
 
 func resolveRefsWorkspaceRoot(pathFlag string) (string, error) {
-	target := strings.TrimSpace(pathFlag)
-	if target == "" {
-		workingDirectory, err := os.Getwd()
-		if err != nil {
-			return "", err
-		}
-		target = workingDirectory
-	}
-
-	absPath, err := resolveProjectPath(target)
-	if err != nil {
-		return "", err
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		absPath = filepath.Dir(absPath)
-	}
-
-	return absPath, nil
-}
-
-func resolvedProjectRoot() string {
-	cfg := currentConfig()
-	if cfg.ConfigDir != "" {
-		if root, err := cfg.ResolvedProjectRoot(cfg.ConfigDir); err == nil {
-			return root
-		}
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
+	return resolveCommandTargetDir(pathFlag)
 }
 
 func startRefsLSPClient(

@@ -580,7 +580,13 @@ model = "test"
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
 
-	wantConfigDir := filepath.Join(projectDir, ".codesight")
+	wantConfigDir, err := filepath.Abs(filepath.Join(projectDir, ".codesight"))
+	if err != nil {
+		t.Fatalf("filepath.Abs returned error: %v", err)
+	}
+	if resolvedWantConfigDir, resolveErr := filepath.EvalSymlinks(wantConfigDir); resolveErr == nil {
+		wantConfigDir = resolvedWantConfigDir
+	}
 	if cfg.ConfigDir != wantConfigDir {
 		t.Fatalf("ConfigDir = %q, want %q", cfg.ConfigDir, wantConfigDir)
 	}

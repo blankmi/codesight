@@ -15,6 +15,7 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 	clearTestEnv(t)
 
 	projectDir := t.TempDir()
+	resolvedProjectDir := mustResolvePath(t, projectDir)
 
 	stdout, _, err := executeRootCommand(t, "config", projectDir)
 	if err != nil {
@@ -35,7 +36,7 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 		"lsp.java.args":             {Value: "", Source: "default"},
 		"lsp.java.gradle_java_home": {Value: "", Source: "default"},
 		"lsp.java.timeout":          {Value: "60s", Source: "default"},
-		"project_root":              {Value: "", Source: "default"},
+		"project_root":              {Value: resolvedProjectDir, Source: "default"},
 		"state_dir":                 {Value: "", Source: "default"},
 	}
 
