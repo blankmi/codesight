@@ -179,7 +179,7 @@ func (l *Lifecycle) Status(ctx context.Context, workspaceRoot string) ([]DaemonS
 			continue
 		}
 
-		if state.WorkspaceRoot != canonicalRoot {
+		if !isPathRelated(state.WorkspaceRoot, canonicalRoot) {
 			continue
 		}
 
@@ -565,6 +565,21 @@ func removeStateArtifacts(statePath, socketPath string) error {
 		removeErrs = append(removeErrs, err)
 	}
 	return errors.Join(removeErrs...)
+}
+
+func isPathRelated(root1, root2 string) bool {
+	if root1 == root2 {
+		return true
+	}
+	// Check if root1 is a parent of root2
+	if strings.HasPrefix(root2, root1+string(filepath.Separator)) {
+		return true
+	}
+	// Check if root2 is a parent of root1
+	if strings.HasPrefix(root1, root2+string(filepath.Separator)) {
+		return true
+	}
+	return false
 }
 
 func canonicalWorkspaceRoot(workspaceRoot string) (string, error) {

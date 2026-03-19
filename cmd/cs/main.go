@@ -750,23 +750,34 @@ func findProjectRoot(path string) string {
 	markers := []string{
 		".codesight",
 		".csignore",
+		"settings.gradle.kts",
+		"settings.gradle",
 		"build.gradle.kts",
 		"build.gradle",
 		"pom.xml",
-		"settings.gradle.kts",
-		"settings.gradle",
 		"go.mod",
 		"package.json",
 		"Cargo.toml",
-		".git",
 	}
 
 	curr := path
+	bestRoot := path
 	for {
+		// Stop at Git root boundary.
+		if _, err := os.Stat(filepath.Join(curr, ".git")); err == nil {
+			return curr
+		}
+
+		foundMarker := false
 		for _, m := range markers {
 			if _, err := os.Stat(filepath.Join(curr, m)); err == nil {
-				return curr
+				foundMarker = true
+				break
 			}
+		}
+
+		if foundMarker {
+			bestRoot = curr
 		}
 
 		parent := filepath.Dir(curr)
@@ -776,7 +787,7 @@ func findProjectRoot(path string) string {
 		curr = parent
 	}
 
-	return path
+	return bestRoot
 }
 
 func startRefsLSPClient(

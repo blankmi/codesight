@@ -72,6 +72,7 @@ func runLSPWarmup(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	workspaceRoot = findProjectRoot(workspaceRoot)
 
 	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
 		WorkspaceRoot: workspaceRoot,
@@ -99,6 +100,7 @@ func runLSPStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	workspaceRoot = findProjectRoot(workspaceRoot)
 
 	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
 		WorkspaceRoot: workspaceRoot,
@@ -134,6 +136,7 @@ func runLSPRestart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	workspaceRoot = findProjectRoot(workspaceRoot)
 
 	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
 		WorkspaceRoot: workspaceRoot,

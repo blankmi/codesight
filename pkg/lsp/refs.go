@@ -281,8 +281,10 @@ func resolveCandidates(
 		}
 
 		// Filter by path if requested.
-		if filterPath != "" && !strings.HasPrefix(path, filterPath) {
-			continue
+		if filterPath != "" {
+			if path != filterPath && !strings.HasPrefix(path, filterPath+string(filepath.Separator)) {
+				continue
+			}
 		}
 
 		candidates = append(candidates, resolvedSymbol{
