@@ -4,10 +4,12 @@ package lsp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +146,85 @@ func TestDaemonProxyRoundTrip(t *testing.T) {
 	}
 	if echoed["message"] != "round-trip" {
 		t.Fatalf("echoed message = %q, want %q", echoed["message"], "round-trip")
+	}
+}
+
+func TestDaemonForwardToClientForwardsToActiveClient(t *testing.T) {
+	var clientBuffer bytes.Buffer
+	var serverBuffer bytes.Buffer
+
+	conn := &daemonTestConn{}
+	runtime := &daemonRuntime{
+		serverWriter: bufio.NewWriter(&serverBuffer),
+		active: &daemonClient{
+			conn:   conn,
+			writer: bufio.NewWriter(&clientBuffer),
+		},
+	}
+
+	payload := json.RawMessage(`{"jsonrpc":"2.0","id":7,"result":{"ok":true}}`)
+	runtime.forwardToClient(payload)
+
+	gotPayload, err := readLSPMessage(bufio.NewReader(bytes.NewReader(clientBuffer.Bytes())))
+	if err != nil {
+		t.Fatalf("read forwarded payload returned error: %v", err)
+	}
+	if string(gotPayload) != string(payload) {
+		t.Fatalf("forwarded payload = %s, want %s", gotPayload, payload)
+	}
+	if serverBuffer.Len() != 0 {
+		t.Fatalf("server buffer length = %d, want 0", serverBuffer.Len())
+	}
+	if conn.closed {
+		t.Fatal("active client connection was closed unexpectedly")
+	}
+}
+
+func TestDaemonForwardToClientRejectsServerRequestWithoutActiveClient(t *testing.T) {
+	var serverBuffer bytes.Buffer
+
+	runtime := &daemonRuntime{
+		serverWriter: bufio.NewWriter(&serverBuffer),
+	}
+
+	request := RequestMessage{
+		JSONRPC: JSONRPCVersion,
+		ID:      99,
+		Method:  "window/showMessageRequest",
+		Params:  map[string]any{"message": "hello"},
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("json.Marshal request returned error: %v", err)
+	}
+
+	runtime.forwardToClient(payload)
+
+	responsePayload, err := readLSPMessage(bufio.NewReader(bytes.NewReader(serverBuffer.Bytes())))
+	if err != nil {
+		t.Fatalf("read rejection payload returned error: %v", err)
+	}
+
+	var response ResponseMessage
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		t.Fatalf("json.Unmarshal rejection response returned error: %v", err)
+	}
+
+	responseID, err := parseResponseID(response.ID)
+	if err != nil {
+		t.Fatalf("parseResponseID returned error: %v", err)
+	}
+	if responseID != request.ID {
+		t.Fatalf("rejection response id = %d, want %d", responseID, request.ID)
+	}
+	if response.Error == nil {
+		t.Fatal("rejection response error = nil, want method-not-found error")
+	}
+	if response.Error.Code != -32601 {
+		t.Fatalf("rejection response code = %d, want -32601", response.Error.Code)
+	}
+	if response.Error.Message != "method not found (no active client)" {
+		t.Fatalf("rejection response message = %q, want %q", response.Error.Message, "method not found (no active client)")
 	}
 }
 
@@ -579,4 +660,51 @@ func appendDaemonShutdownLog(path, event string) {
 	}()
 
 	_, _ = file.WriteString(event + "\n")
+}
+
+type daemonTestConn struct {
+	closed bool
+}
+
+func (c *daemonTestConn) Read(_ []byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c *daemonTestConn) Write(payload []byte) (int, error) {
+	return len(payload), nil
+}
+
+func (c *daemonTestConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+func (c *daemonTestConn) LocalAddr() net.Addr {
+	return daemonTestAddr("local")
+}
+
+func (c *daemonTestConn) RemoteAddr() net.Addr {
+	return daemonTestAddr("remote")
+}
+
+func (c *daemonTestConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (c *daemonTestConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (c *daemonTestConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+type daemonTestAddr string
+
+func (a daemonTestAddr) Network() string {
+	return "test"
+}
+
+func (a daemonTestAddr) String() string {
+	return string(a)
 }

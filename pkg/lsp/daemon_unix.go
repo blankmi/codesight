@@ -45,8 +45,8 @@ type daemonRuntime struct {
 	serverWriter *bufio.Writer
 	serverExitCh chan error
 
-	activityUnixNano  atomic.Int64
-	lastStatePersist  atomic.Int64
+	activityUnixNano atomic.Int64
+	lastStatePersist atomic.Int64
 
 	activeMu sync.Mutex
 	active   *daemonClient
@@ -61,8 +61,8 @@ type daemonRuntime struct {
 	// Phase: 0=uninitialized, 1=initialize response cached, 2=fully initialized.
 	initPhase    atomic.Int32
 	initMu       sync.Mutex
-	initResponse []byte            // cached raw initialize response (set once)
-	initReqID    atomic.Value      // json.RawMessage — tracks in-flight initialize request ID
+	initResponse []byte       // cached raw initialize response (set once)
+	initReqID    atomic.Value // json.RawMessage — tracks in-flight initialize request ID
 }
 
 const daemonStatePersistInterval = 5 * time.Second
@@ -542,25 +542,22 @@ func (d *daemonRuntime) replyInitializeFromCache(conn net.Conn, requestPayload [
 }
 
 func (d *daemonRuntime) forwardToClient(payload []byte) {
-	d.activeMu.Lock()
-	isActive := d.active != nil
-	d.activeMu.Unlock()
-
-	if !isActive {
-		d.rejectServerRequest(payload)
-		return
-	}
+	shouldReject := false
 
 	d.activeMu.Lock()
-	defer d.activeMu.Unlock()
-
 	if d.active == nil {
-		d.rejectServerRequest(payload)
-		return
-	}
-	if err := writeLSPMessage(d.active.writer, payload); err != nil {
+		// Decide the no-client path under activeMu so reconnects cannot race the
+		// rejection, but perform the server write after unlocking to avoid
+		// nesting activeMu with serverWriteMu.
+		shouldReject = true
+	} else if err := writeLSPMessage(d.active.writer, payload); err != nil {
 		_ = d.active.conn.Close()
 		d.active = nil
+	}
+	d.activeMu.Unlock()
+
+	if shouldReject {
+		d.rejectServerRequest(payload)
 	}
 }
 
