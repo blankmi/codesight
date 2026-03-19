@@ -412,9 +412,8 @@ func defaultDaemonConnectorInitializeParams(workspaceRoot string, spec ServerSpe
 		workspaceName = defaultDaemonConnectorWorkspaceName
 	}
 
-	processID := os.Getpid()
 	return InitializeParams{
-		ProcessID:  &processID,
+		ProcessID:  nil, // null tells LSP server not to monitor a parent process; the daemon manages lifecycle
 		RootURI:    rootURI,
 		ClientInfo: &ClientInfo{Name: "cs"},
 		Capabilities: map[string]any{

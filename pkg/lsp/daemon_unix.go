@@ -22,10 +22,10 @@ import (
 
 const (
 	daemonConnectProbeTimeout     = 200 * time.Millisecond
-	daemonReadyTimeout            = 2 * time.Second
+	daemonReadyTimeout            = 10 * time.Second
 	daemonReadyPollInterval       = 25 * time.Millisecond
 	daemonAcceptPollInterval      = 100 * time.Millisecond
-	daemonInternalShutdownReqID   = int64(9_000_000_000_000_000)
+	daemonInternalShutdownReqID   = int64(2_000_000_000)
 	daemonInternalMessageDeadline = 2 * time.Second
 )
 
@@ -55,6 +55,14 @@ type daemonRuntime struct {
 	stateWriteMu  sync.Mutex
 
 	shutdownResponseCh chan struct{}
+
+	// Initialize caching: prevents duplicate initialize/initialized to the
+	// language server when multiple clients connect over the daemon lifetime.
+	// Phase: 0=uninitialized, 1=initialize response cached, 2=fully initialized.
+	initPhase    atomic.Int32
+	initMu       sync.Mutex
+	initResponse []byte            // cached raw initialize response (set once)
+	initReqID    atomic.Value      // json.RawMessage — tracks in-flight initialize request ID
 }
 
 const daemonStatePersistInterval = 5 * time.Second
@@ -207,6 +215,7 @@ func runDaemon(config daemonProcessConfig) error {
 	}
 
 	serverCmd := exec.Command(config.Binary, config.Args...)
+	serverCmd.Dir = config.WorkspaceRoot
 	serverCmd.Env = scrubInternalDaemonEnv(os.Environ())
 	serverStdin, err := serverCmd.StdinPipe()
 	if err != nil {
@@ -219,7 +228,7 @@ func runDaemon(config daemonProcessConfig) error {
 		_ = serverStdin.Close()
 		return fmt.Errorf("create language-server stdout pipe: %w", err)
 	}
-	serverCmd.Stderr = io.Discard
+	serverCmd.Stderr = os.Stderr
 
 	if err := serverCmd.Start(); err != nil {
 		_ = listener.Close()
@@ -304,6 +313,36 @@ func (d *daemonRuntime) handleClient(conn net.Conn) {
 		}
 
 		d.touchActivity(time.Now())
+
+		method := extractMethod(payload)
+		phase := d.initPhase.Load()
+
+		switch method {
+		case MethodInitialize:
+			if phase >= 1 {
+				// Subsequent client: reply from cache, rewrite response ID.
+				if err := d.replyInitializeFromCache(conn, payload); err != nil {
+					return
+				}
+				continue
+			}
+			// First client: track request ID, fall through to forward.
+			if reqID := extractRequestID(payload); reqID != nil {
+				d.initReqID.Store(append([]byte(nil), reqID...))
+			}
+		case MethodInitialized:
+			if phase >= 2 {
+				continue // swallow duplicate
+			}
+			// First client: forward, then mark fully initialized.
+			if err := d.writeToServer(payload); err != nil {
+				_ = killProcess(d.serverCmd.Process.Pid)
+				return
+			}
+			d.initPhase.Store(2)
+			continue
+		}
+
 		if err := d.writeToServer(payload); err != nil {
 			_ = killProcess(d.serverCmd.Process.Pid)
 			return
@@ -320,6 +359,7 @@ func (d *daemonRuntime) serverReadLoop() {
 
 		d.touchActivity(time.Now())
 		d.observeShutdownResponse(payload)
+		d.cacheInitializeResponse(payload)
 		d.forwardToClient(payload)
 	}
 }
@@ -406,17 +446,146 @@ func (d *daemonRuntime) observeShutdownResponse(payload []byte) {
 	}
 }
 
+func extractMethod(payload []byte) string {
+	var envelope struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return ""
+	}
+	return envelope.Method
+}
+
+func extractRequestID(payload []byte) json.RawMessage {
+	var envelope struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil
+	}
+	if len(envelope.ID) == 0 {
+		return nil
+	}
+	return envelope.ID
+}
+
+func (d *daemonRuntime) cacheInitializeResponse(payload []byte) {
+	if d.initPhase.Load() != 0 {
+		return
+	}
+
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return
+	}
+	// Responses have an ID but no method.
+	if envelope.Method != "" || len(envelope.ID) == 0 {
+		return
+	}
+
+	// Check if this response ID matches the tracked initialize request ID.
+	stored, ok := d.initReqID.Load().([]byte)
+	if !ok || len(stored) == 0 {
+		return
+	}
+	if string(envelope.ID) != string(stored) {
+		return
+	}
+
+	d.initMu.Lock()
+	defer d.initMu.Unlock()
+
+	if d.initPhase.Load() != 0 {
+		return
+	}
+	d.initResponse = append([]byte(nil), payload...)
+	d.initPhase.Store(1)
+}
+
+func (d *daemonRuntime) replyInitializeFromCache(conn net.Conn, requestPayload []byte) error {
+	clientReqID := extractRequestID(requestPayload)
+	if clientReqID == nil {
+		return fmt.Errorf("initialize request missing id")
+	}
+
+	d.initMu.Lock()
+	cached := d.initResponse
+	d.initMu.Unlock()
+
+	if len(cached) == 0 {
+		return fmt.Errorf("no cached initialize response")
+	}
+
+	var response ResponseMessage
+	if err := json.Unmarshal(cached, &response); err != nil {
+		return fmt.Errorf("unmarshal cached initialize response: %w", err)
+	}
+	response.ID = append(json.RawMessage(nil), clientReqID...)
+
+	rewritten, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("marshal rewritten initialize response: %w", err)
+	}
+
+	d.activeMu.Lock()
+	defer d.activeMu.Unlock()
+	if d.active == nil || d.active.conn != conn {
+		return fmt.Errorf("client disconnected")
+	}
+	if err := writeLSPMessage(d.active.writer, rewritten); err != nil {
+		return fmt.Errorf("write cached initialize response: %w", err)
+	}
+	return nil
+}
+
 func (d *daemonRuntime) forwardToClient(payload []byte) {
+	d.activeMu.Lock()
+	isActive := d.active != nil
+	d.activeMu.Unlock()
+
+	if !isActive {
+		d.rejectServerRequest(payload)
+		return
+	}
+
 	d.activeMu.Lock()
 	defer d.activeMu.Unlock()
 
 	if d.active == nil {
+		d.rejectServerRequest(payload)
 		return
 	}
 	if err := writeLSPMessage(d.active.writer, payload); err != nil {
 		_ = d.active.conn.Close()
 		d.active = nil
 	}
+}
+
+func (d *daemonRuntime) rejectServerRequest(payload []byte) {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return
+	}
+	// A request must have both an ID and a Method.
+	if envelope.Method == "" || len(envelope.ID) == 0 {
+		return
+	}
+
+	response := ResponseMessage{
+		JSONRPC: JSONRPCVersion,
+		ID:      envelope.ID,
+		Error: &ResponseErrorBody{
+			Code:    -32601,
+			Message: "method not found (no active client)",
+		},
+	}
+	_ = d.writeToServerJSON(response)
 }
 
 func (d *daemonRuntime) activateClient(conn net.Conn) bool {

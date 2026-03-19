@@ -151,7 +151,7 @@ var (
 		return detectRefsLanguage(workspaceRoot, registry)
 	}
 	runWorkspaceLSPWarmup = func(ctx context.Context, workspaceRoot, language string) error {
-		return executeLSPWarmup(ctx, workspaceRoot, language)
+		return executeLSPWarmup(ctx, workspaceRoot, language, runtimeConfig)
 	}
 
 	runtimeConfig = configpkg.Defaults()
@@ -192,7 +192,7 @@ func init() {
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(callersCmd)
 	rootCmd.AddCommand(implementsCmd)
-	rootCmd.AddCommand(warmupCmd)
+	rootCmd.AddCommand(lspCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(clearCmd)
 	rootCmd.AddCommand(configCmd)
@@ -257,7 +257,7 @@ func configProjectPath(cmd *cobra.Command, args []string) (string, error) {
 			return "", err
 		}
 		return resolveRefsWorkspaceRoot(pathFlag)
-	case warmupCmd.Name():
+	case lspWarmupCmd.Name(), lspStatusCmd.Name(), lspRestartCmd.Name():
 		if len(args) > 0 {
 			return resolveRefsWorkspaceRoot(args[0])
 		}
@@ -791,9 +791,8 @@ func refsInitializeParams(workspaceRoot string, spec lsp.ServerSpec) (lsp.Initia
 		workspaceName = "workspace"
 	}
 
-	processID := os.Getpid()
 	params := lsp.InitializeParams{
-		ProcessID:  &processID,
+		ProcessID:  nil,
 		RootURI:    rootURI,
 		ClientInfo: &lsp.ClientInfo{Name: "cs"},
 		Capabilities: map[string]any{

@@ -556,6 +556,184 @@ func hasArg(target string) bool {
 	return false
 }
 
+func TestLifecycleStatusFindsRunningDaemon(t *testing.T) {
+	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
+	workspace := t.TempDir()
+
+	lease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	if !waitForProcessAlive(lease.PID, time.Second) {
+		t.Fatalf("process %d did not become alive", lease.PID)
+	}
+	t.Cleanup(func() { _ = lifecycle.Stop(workspace, "go") })
+
+	statuses, err := lifecycle.Status(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("Status returned %d entries, want 1", len(statuses))
+	}
+
+	s := statuses[0]
+	if s.PID != lease.PID {
+		t.Fatalf("Status PID = %d, want %d", s.PID, lease.PID)
+	}
+	if s.Language != "go" {
+		t.Fatalf("Status Language = %q, want %q", s.Language, "go")
+	}
+	if !s.Running {
+		t.Fatal("Status Running = false, want true")
+	}
+	if s.StartedAt.IsZero() {
+		t.Fatal("Status StartedAt should not be zero")
+	}
+	if s.LogPath == "" {
+		t.Fatal("Status LogPath should not be empty")
+	}
+}
+
+func TestLifecycleStatusNoMatchWorkspace(t *testing.T) {
+	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
+	workspace := t.TempDir()
+
+	_, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = lifecycle.Stop(workspace, "go") })
+
+	otherWorkspace := t.TempDir()
+	statuses, err := lifecycle.Status(context.Background(), otherWorkspace)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("Status returned %d entries for non-matching workspace, want 0", len(statuses))
+	}
+}
+
+func TestLifecycleStatusDeadPID(t *testing.T) {
+	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
+	workspace := t.TempDir()
+
+	workspaceAbs, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatalf("filepath.Abs returned error: %v", err)
+	}
+
+	deadPID := 999_999
+	for processAlive(deadPID) {
+		deadPID++
+	}
+
+	stateKey := StateKey(workspaceAbs, "go")
+	statePath, err := lifecycle.statePathForKey(stateKey)
+	if err != nil {
+		t.Fatalf("statePathForKey returned error: %v", err)
+	}
+
+	state := lifecycleState{
+		WorkspaceRoot:    workspaceAbs,
+		Language:         "go",
+		StateKey:         stateKey,
+		PID:              deadPID,
+		Binary:           "test-binary",
+		StartedUnixNano:  time.Now().Add(-time.Hour).UnixNano(),
+		LastUsedUnixNano: time.Now().Add(-time.Minute).UnixNano(),
+	}
+	if err := writeStateFile(statePath, state); err != nil {
+		t.Fatalf("writeStateFile returned error: %v", err)
+	}
+
+	statuses, err := lifecycle.Status(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("Status returned %d entries, want 1", len(statuses))
+	}
+
+	s := statuses[0]
+	if s.Running {
+		t.Fatal("Status Running = true for dead PID, want false")
+	}
+	if s.SocketHealthy {
+		t.Fatal("Status SocketHealthy = true for dead PID, want false")
+	}
+	if s.PID != deadPID {
+		t.Fatalf("Status PID = %d, want %d", s.PID, deadPID)
+	}
+}
+
+func TestLifecycleStopByKeyRemovesLegacyStateFile(t *testing.T) {
+	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
+	workspace := t.TempDir()
+
+	workspaceAbs, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatalf("filepath.Abs returned error: %v", err)
+	}
+
+	// Simulate a legacy state file with a full-length hash key.
+	legacyKey := "f4c21a9120853516393401f7e28ae43b116c699e19c83b03e56400d5053f8094"
+	statePath, err := lifecycle.statePathForKey(legacyKey)
+	if err != nil {
+		t.Fatalf("statePathForKey returned error: %v", err)
+	}
+
+	deadPID := 999_999
+	for processAlive(deadPID) {
+		deadPID++
+	}
+
+	state := lifecycleState{
+		WorkspaceRoot:    workspaceAbs,
+		Language:         "go",
+		StateKey:         legacyKey,
+		PID:              deadPID,
+		Binary:           "gopls",
+		StartedUnixNano:  time.Now().Add(-time.Hour).UnixNano(),
+		LastUsedUnixNano: time.Now().Add(-time.Minute).UnixNano(),
+	}
+	if err := writeStateFile(statePath, state); err != nil {
+		t.Fatalf("writeStateFile returned error: %v", err)
+	}
+
+	// Status should find it.
+	statuses, err := lifecycle.Status(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("Status returned %d entries, want 1", len(statuses))
+	}
+	if statuses[0].StateKey != legacyKey {
+		t.Fatalf("Status StateKey = %q, want %q", statuses[0].StateKey, legacyKey)
+	}
+
+	// StopByKey should remove the legacy state file.
+	if err := lifecycle.StopByKey(legacyKey); err != nil {
+		t.Fatalf("StopByKey returned error: %v", err)
+	}
+
+	// State file should be gone.
+	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected state file to be removed, got err: %v", err)
+	}
+
+	// Status should now return empty.
+	statuses, err = lifecycle.Status(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("Status returned %d entries after StopByKey, want 0", len(statuses))
+	}
+}
+
 func TestLifecycleStopMissingStateIsNoop(t *testing.T) {
 	lifecycle := newTestLifecycle(t, DefaultIdleTimeout)
 	workspace := t.TempDir()

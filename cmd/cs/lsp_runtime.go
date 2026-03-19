@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -23,6 +24,9 @@ type lspClientConnectionMetadata struct {
 }
 
 var (
+	warmupProbeInterval = 2 * time.Second
+	warmupProbeTimeout  = 90 * time.Second
+
 	refsColdStartHintThreshold = 5 * time.Second
 
 	lspRuntimeGOOS               = runtime.GOOS
@@ -284,7 +288,7 @@ func shouldEmitRefsColdStartHint(language string, metadata lspClientConnectionMe
 }
 
 func appendRefsColdStartHint(output string) string {
-	const tip = "Tip: run 'cs warmup .' to pre-start the language server"
+	const tip = "Tip: run 'cs lsp warmup .' to pre-start the language server"
 	trimmed := strings.TrimSpace(output)
 	if trimmed == "" {
 		return tip
@@ -292,9 +296,9 @@ func appendRefsColdStartHint(output string) string {
 	return trimmed + "\n" + tip
 }
 
-func executeLSPWarmup(ctx context.Context, workspaceRoot, language string) error {
+func executeLSPWarmup(ctx context.Context, workspaceRoot, language string, cfg *configpkg.Config) error {
 	registry := lsp.NewRegistry()
-	return executeLSPWarmupWithRegistry(ctx, registry, workspaceRoot, language)
+	return executeLSPWarmupWithRegistry(ctx, registry, workspaceRoot, language, cfg)
 }
 
 func executeLSPWarmupWithRegistry(
@@ -302,6 +306,7 @@ func executeLSPWarmupWithRegistry(
 	registry *lsp.Registry,
 	workspaceRoot string,
 	language string,
+	cfg *configpkg.Config,
 ) error {
 	if registry == nil {
 		registry = lsp.NewRegistry()
@@ -313,13 +318,48 @@ func executeLSPWarmupWithRegistry(
 	}
 
 	runtime := newLSPCommandRuntime(registry)
-	_, release, _, err := runtime.connectClientWithMetadata(ctx, workspaceRoot, spec)
+	client, release, _, err := runtime.connectClientWithMetadata(ctx, workspaceRoot, spec)
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	return nil
+	// Readiness probe: poll workspace/symbol until the LSP returns symbols,
+	// indicating it has finished indexing.
+	probeTimeout := resolvedWarmupProbeTimeout(cfg)
+	ticker := time.NewTicker(warmupProbeInterval)
+	defer ticker.Stop()
+	deadline := time.After(probeTimeout)
+
+	for attempt := 0; ; attempt++ {
+		var symbols []lsp.SymbolInformation
+		if probeErr := client.Call(ctx, lsp.MethodWorkspaceSymbol,
+			lsp.WorkspaceSymbolParams{Query: "*"}, &symbols); probeErr != nil {
+			return fmt.Errorf("LSP readiness probe failed: %w", probeErr)
+		}
+		if len(symbols) > 0 {
+			return nil
+		}
+
+		// First attempt returned nothing — wait and retry.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("warmup cancelled while waiting for LSP to index: %w", ctx.Err())
+		case <-deadline:
+			return fmt.Errorf("LSP connected but returned no symbols after %s — the language server may not have finished indexing", probeTimeout)
+		case <-ticker.C:
+			// retry
+		}
+	}
+}
+
+func resolvedWarmupProbeTimeout(cfg *configpkg.Config) time.Duration {
+	if cfg != nil {
+		if d, err := cfg.LSPWarmupProbeTimeoutDuration(); err == nil && d > 0 {
+			return d
+		}
+	}
+	return warmupProbeTimeout
 }
 
 func resolvedLSPDaemonIdleTimeout(cfg *configpkg.Config) time.Duration {

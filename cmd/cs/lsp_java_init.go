@@ -170,6 +170,9 @@ func buildJDTLSInitOptions(gradleJavaHome string, suppressGradleImport bool) map
 				"import": map[string]any{
 					"gradle": gradleOptions,
 				},
+				"symbols": map[string]any{
+					"includeSourceMethodDeclarations": true,
+				},
 			},
 		},
 	}

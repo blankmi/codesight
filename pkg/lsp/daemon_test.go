@@ -18,6 +18,7 @@ import (
 const (
 	daemonFakeLSPHelperArg      = "codesight-lsp-daemon-fake-lsp"
 	daemonShutdownLogPathEnvVar = "CODESIGHT_LSP_DAEMON_TEST_SHUTDOWN_LOG"
+	daemonInitLogPathEnvVar     = "CODESIGHT_LSP_DAEMON_TEST_INIT_LOG"
 )
 
 func TestDaemonProcessConfigValidateIdleTimeout(t *testing.T) {
@@ -299,6 +300,7 @@ func TestDaemonFakeLanguageServerProcess(t *testing.T) {
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
 	shutdownLogPath := strings.TrimSpace(os.Getenv(daemonShutdownLogPathEnvVar))
+	initLogPath := strings.TrimSpace(os.Getenv(daemonInitLogPathEnvVar))
 
 	for {
 		payload, err := readLSPMessage(reader)
@@ -316,6 +318,22 @@ func TestDaemonFakeLanguageServerProcess(t *testing.T) {
 		}
 
 		switch envelope.Method {
+		case MethodInitialize:
+			appendDaemonShutdownLog(initLogPath, MethodInitialize)
+			result, _ := json.Marshal(InitializeResult{
+				Capabilities: map[string]any{"textDocumentSync": 1},
+				ServerInfo:   &ServerInfo{Name: "fake-lsp", Version: "0.1"},
+			})
+			response := ResponseMessage{
+				JSONRPC: JSONRPCVersion,
+				ID:      append(json.RawMessage(nil), envelope.ID...),
+				Result:  result,
+			}
+			if err := writeJSONRPCMessage(writer, response); err != nil {
+				return
+			}
+		case MethodInitialized:
+			appendDaemonShutdownLog(initLogPath, MethodInitialized)
 		case MethodShutdown:
 			appendDaemonShutdownLog(shutdownLogPath, MethodShutdown)
 			response := ResponseMessage{
@@ -347,6 +365,170 @@ func TestDaemonFakeLanguageServerProcess(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestDaemonInitializeCaching(t *testing.T) {
+	initLogPath := filepath.Join(t.TempDir(), "init.log")
+	lifecycle := newDaemonTestLifecycleWithInitLog(t, DefaultIdleTimeout, "", initLogPath)
+	workspace := t.TempDir()
+
+	lease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
+
+	// Helper: perform initialize handshake + echo request on a connection.
+	doSession := func(reqID int64) {
+		conn, err := dialDaemonSocket(context.Background(), lease.SocketPath)
+		if err != nil {
+			t.Fatalf("dialDaemonSocket returned error: %v", err)
+		}
+		defer func() {
+			_ = conn.Close()
+		}()
+
+		writer := bufio.NewWriter(conn)
+		reader := bufio.NewReader(conn)
+
+		// Send initialize request.
+		initReq := RequestMessage{
+			JSONRPC: JSONRPCVersion,
+			ID:      reqID,
+			Method:  MethodInitialize,
+			Params:  InitializeParams{Capabilities: map[string]any{}},
+		}
+		if err := writeJSONRPCMessage(writer, initReq); err != nil {
+			t.Fatalf("write initialize returned error: %v", err)
+		}
+
+		// Read initialize response.
+		payload, err := readLSPMessage(reader)
+		if err != nil {
+			t.Fatalf("read initialize response returned error: %v", err)
+		}
+		var resp ResponseMessage
+		if err := json.Unmarshal(payload, &resp); err != nil {
+			t.Fatalf("unmarshal initialize response returned error: %v", err)
+		}
+		gotID, err := parseResponseID(resp.ID)
+		if err != nil {
+			t.Fatalf("parseResponseID returned error: %v", err)
+		}
+		if gotID != reqID {
+			t.Fatalf("initialize response id = %d, want %d", gotID, reqID)
+		}
+		if resp.Error != nil {
+			t.Fatalf("initialize response error: %v", resp.Error)
+		}
+
+		// Send initialized notification.
+		initedNotif := NotificationMessage{
+			JSONRPC: JSONRPCVersion,
+			Method:  MethodInitialized,
+		}
+		if err := writeJSONRPCMessage(writer, initedNotif); err != nil {
+			t.Fatalf("write initialized returned error: %v", err)
+		}
+
+		// Send an echo request to confirm the connection works.
+		echoReq := RequestMessage{
+			JSONRPC: JSONRPCVersion,
+			ID:      reqID + 1000,
+			Method:  "codesight/echo",
+			Params:  map[string]any{"session": reqID},
+		}
+		if err := writeJSONRPCMessage(writer, echoReq); err != nil {
+			t.Fatalf("write echo returned error: %v", err)
+		}
+
+		echoPayload, err := readLSPMessage(reader)
+		if err != nil {
+			t.Fatalf("read echo response returned error: %v", err)
+		}
+		var echoResp ResponseMessage
+		if err := json.Unmarshal(echoPayload, &echoResp); err != nil {
+			t.Fatalf("unmarshal echo response returned error: %v", err)
+		}
+		echoRespID, _ := parseResponseID(echoResp.ID)
+		if echoRespID != reqID+1000 {
+			t.Fatalf("echo response id = %d, want %d", echoRespID, reqID+1000)
+		}
+	}
+
+	// First client session.
+	doSession(1)
+
+	// Small gap to let the daemon deactivate the first client.
+	time.Sleep(50 * time.Millisecond)
+
+	// Second client session.
+	doSession(100)
+
+	// Small gap to let async log writes complete.
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify the fake server received exactly 1 initialize and 1 initialized.
+	logData, err := os.ReadFile(initLogPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile init log returned error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+
+	initCount := 0
+	initializedCount := 0
+	for _, line := range lines {
+		switch line {
+		case MethodInitialize:
+			initCount++
+		case MethodInitialized:
+			initializedCount++
+		}
+	}
+
+	if initCount != 1 {
+		t.Fatalf("fake server received %d initialize requests, want 1", initCount)
+	}
+	if initializedCount != 1 {
+		t.Fatalf("fake server received %d initialized notifications, want 1", initializedCount)
+	}
+}
+
+func newDaemonTestLifecycleWithInitLog(t *testing.T, idleTimeout time.Duration, shutdownLogPath, initLogPath string) *Lifecycle {
+	t.Helper()
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable returned error: %v", err)
+	}
+	stateDir, err := os.MkdirTemp("", "cslsp-state-")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(stateDir)
+	})
+	t.Setenv(daemonShutdownLogPathEnvVar, shutdownLogPath)
+	t.Setenv(daemonInitLogPathEnvVar, initLogPath)
+
+	registry := NewRegistryFromEntries(map[string]ServerSpec{
+		"go": {
+			Language:    "go",
+			Binary:      testBinary,
+			Args:        []string{"-test.run=TestDaemonFakeLanguageServerProcess", "--", daemonFakeLSPHelperArg},
+			InstallHint: "test helper process",
+		},
+	})
+
+	return NewLifecycle(
+		registry,
+		WithIdleTimeout(idleTimeout),
+		WithStateDirResolver(func() (string, error) {
+			return stateDir, nil
+		}),
+	)
 }
 
 func newDaemonTestLifecycle(t *testing.T, idleTimeout time.Duration, shutdownLogPath string) *Lifecycle {

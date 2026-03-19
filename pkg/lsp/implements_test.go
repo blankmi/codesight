@@ -21,6 +21,9 @@ type stubImplementsClient struct {
 	subtypesByItem map[string][]typeHierarchyItem
 	subtypesErr    error
 
+	implementationLocations []Location
+	implementationErr       error
+
 	methods []string
 }
 
@@ -74,8 +77,44 @@ func (s *stubImplementsClient) Call(ctx context.Context, method string, params a
 		*out = append([]typeHierarchyItem(nil), subtypes...)
 		return nil
 
+	case MethodTextDocumentImplementation:
+		if s.implementationErr != nil {
+			return s.implementationErr
+		}
+		if _, ok := params.(TextDocumentPositionParams); !ok {
+			return fmt.Errorf("implementation params type %T", params)
+		}
+
+		out, ok := result.(*[]Location)
+		if !ok {
+			return fmt.Errorf("implementation result type %T", result)
+		}
+		*out = append([]Location(nil), s.implementationLocations...)
+		return nil
+
 	default:
 		return fmt.Errorf("unexpected method %q", method)
+	}
+}
+
+func TestImplementsEmptySymbolsReturnsNotIndexed(t *testing.T) {
+	client := &stubImplementsClient{
+		workspaceSymbols: []SymbolInformation{},
+	}
+
+	engine := NewImplementsEngine(client)
+	_, err := engine.Find(context.Background(), ImplementsOptions{
+		WorkspaceRoot: t.TempDir(),
+		Symbol:        "Target",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, errLSPNoSymbols) {
+		t.Fatalf("error = %v, want errLSPNoSymbols", err)
+	}
+	if errors.Is(err, errSymbolNotFound) {
+		t.Fatal("error should not be errSymbolNotFound")
 	}
 }
 
@@ -118,6 +157,52 @@ func TestImplementsLSPHappyPath(t *testing.T) {
 		MethodWorkspaceSymbol,
 		methodTextDocumentPrepareTypeHierarchy,
 		methodTypeHierarchySubtypes,
+	}
+	if !slices.Equal(client.methods, wantMethods) {
+		t.Fatalf("method order = %v, want %v", client.methods, wantMethods)
+	}
+}
+
+func TestImplementsDualLookupFallback(t *testing.T) {
+	root := t.TempDir()
+	client := &stubImplementsClient{
+		workspaceSymbols: []SymbolInformation{
+			implementsSymbol("UserInformationService", filepath.Join(root, "UserInformationService.java"), 2),
+		},
+		// No type hierarchy results (simulates JDTLS missing interfaces in hierarchy)
+		prepareItems: nil,
+		// Provide results via textDocument/implementation
+		implementationLocations: []Location{
+			{
+				URI: implementsFileURI(filepath.Join(root, "UserServiceImpl.java")),
+				Range: Range{
+					Start: Position{Line: 10},
+				},
+			},
+		},
+	}
+
+	engine := NewImplementsEngine(client)
+	output, err := engine.Find(context.Background(), ImplementsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "UserInformationService",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"UserServiceImpl (UserServiceImpl.java)",
+		"1 implementations",
+	}, "\n")
+	if output != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)
+	}
+
+	wantMethods := []string{
+		MethodWorkspaceSymbol,
+		methodTextDocumentPrepareTypeHierarchy,
+		MethodTextDocumentImplementation,
 	}
 	if !slices.Equal(client.methods, wantMethods) {
 		t.Fatalf("method order = %v, want %v", client.methods, wantMethods)

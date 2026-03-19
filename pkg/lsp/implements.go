@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -81,6 +82,9 @@ func (e *ImplementsEngine) Find(ctx context.Context, opts ImplementsOptions) (st
 	if err != nil {
 		return "", fmt.Errorf("workspace/symbol request failed: %w", err)
 	}
+	if len(symbols) == 0 {
+		return "", fmt.Errorf("%w: %q", errLSPNoSymbols, symbol)
+	}
 
 	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, "")
 	if err != nil {
@@ -105,18 +109,30 @@ func (e *ImplementsEngine) Find(ctx context.Context, opts ImplementsOptions) (st
 	if err != nil {
 		return "", fmt.Errorf("textDocument/prepareTypeHierarchy request failed: %w", err)
 	}
-	if !ok {
-		return formatImplementsOutput(nil), nil
+
+	var implementations []implementationLine
+	if ok {
+		subtypes, err := e.lookupSubtypes(ctx, rootItem)
+		if err != nil {
+			return "", fmt.Errorf("typeHierarchy/subtypes request failed: %w", err)
+		}
+		implementations, err = toImplementationLines(workspaceRoot, matcher, subtypes)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	subtypes, err := e.lookupSubtypes(ctx, rootItem)
-	if err != nil {
-		return "", fmt.Errorf("typeHierarchy/subtypes request failed: %w", err)
-	}
-
-	implementations, err := toImplementationLines(workspaceRoot, matcher, subtypes)
-	if err != nil {
-		return "", err
+	// Dual lookup: if type hierarchy returned nothing, try textDocument/implementation.
+	if len(implementations) == 0 {
+		locations, err := e.lookupImplementation(ctx, candidates[0].info)
+		if err != nil {
+			// If both fail or implementation is not supported, we just return whatever we have (likely 0).
+			return formatImplementsOutput(implementations), nil
+		}
+		implementations, err = locationsToImplementationLines(workspaceRoot, matcher, locations)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return formatImplementsOutput(implementations), nil
@@ -133,6 +149,22 @@ func (e *ImplementsEngine) lookupSymbols(ctx context.Context, symbol string) ([]
 		return nil, err
 	}
 	return symbols, nil
+}
+
+func (e *ImplementsEngine) lookupImplementation(
+	ctx context.Context,
+	symbol SymbolInformation,
+) ([]Location, error) {
+	params := TextDocumentPositionParams{
+		TextDocument: TextDocumentIdentifier{URI: symbol.Location.URI},
+		Position:     symbol.Location.Range.Start,
+	}
+
+	var locations []Location
+	if err := e.client.Call(ctx, MethodTextDocumentImplementation, params, &locations); err != nil {
+		return nil, err
+	}
+	return locations, nil
 }
 
 func (e *ImplementsEngine) prepareTypeHierarchy(
@@ -237,6 +269,50 @@ func toImplementationLines(
 	}
 
 	return out, nil
+}
+
+func locationsToImplementationLines(
+	workspaceRoot string,
+	matcher interface{ MatchesPath(string) bool },
+	locations []Location,
+) ([]implementationLine, error) {
+	if len(locations) == 0 {
+		return nil, nil
+	}
+
+	implementations := make([]implementationLine, 0, len(locations))
+	for _, location := range locations {
+		path, err := documentURIToPath(location.URI)
+		if err != nil {
+			return nil, err
+		}
+		if matcher != nil && matcher.MatchesPath(path) {
+			continue
+		}
+
+		name := filepath.Base(path)
+		if ext := filepath.Ext(name); ext != "" {
+			name = strings.TrimSuffix(name, ext)
+		}
+
+		implementations = append(implementations, implementationLine{
+			Name: name,
+			Path: relativePath(workspaceRoot, path),
+			Line: location.Range.Start.Line + 1,
+		})
+	}
+
+	sort.SliceStable(implementations, func(i, j int) bool {
+		if implementations[i].Path != implementations[j].Path {
+			return implementations[i].Path < implementations[j].Path
+		}
+		if implementations[i].Name != implementations[j].Name {
+			return implementations[i].Name < implementations[j].Name
+		}
+		return implementations[i].Line < implementations[j].Line
+	})
+
+	return implementations, nil
 }
 
 func formatImplementsOutput(implementations []implementationLine) string {

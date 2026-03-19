@@ -12,6 +12,7 @@ const (
 	MethodExit                             = "exit"
 	MethodWorkspaceSymbol                  = "workspace/symbol"
 	MethodTextDocumentReferences           = "textDocument/references"
+	MethodTextDocumentImplementation       = "textDocument/implementation"
 	MethodTextDocumentPrepareCallHierarchy = "textDocument/prepareCallHierarchy"
 	MethodCallHierarchyIncomingCalls       = "callHierarchy/incomingCalls"
 )

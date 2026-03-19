@@ -13,8 +13,8 @@ docker:
 agents:
   default: "codex"
   overrides:
-    planner: "claude-code"
-    reflector: "claude-code"
+#    planner: "claude-code"
+#    reflector: "claude-code"
   claude-code:
     docker:
       image: "ck-claude-code-go:latest"

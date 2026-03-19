@@ -122,6 +122,101 @@ func StateKey(workspaceRoot, language string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// DaemonStatus describes the observed state of a single LSP daemon.
+type DaemonStatus struct {
+	WorkspaceRoot string
+	Language      string
+	StateKey      string
+	PID           int
+	Binary        string
+	Running       bool
+	SocketHealthy bool
+	StartedAt     time.Time
+	LastUsedAt    time.Time
+	LogPath       string
+}
+
+// Status returns daemon status for all languages in a workspace.
+// It scans all state files and filters by canonical workspace root.
+func (l *Lifecycle) Status(ctx context.Context, workspaceRoot string) ([]DaemonStatus, error) {
+	if l == nil {
+		return nil, errors.New("lifecycle is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	canonicalRoot, err := canonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	stateRoot, err := l.stateRoot()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(stateRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var statuses []DaemonStatus
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != lifecycleStateFileExtension {
+			continue
+		}
+
+		statePath := filepath.Join(stateRoot, entry.Name())
+		state, err := readStateFile(statePath)
+		if err != nil {
+			continue
+		}
+
+		if state.WorkspaceRoot != canonicalRoot {
+			continue
+		}
+
+		running := processAlive(state.PID) && isCodesightProcess(state.PID)
+
+		var socketHealthy bool
+		if running {
+			healthCtx, cancel := context.WithTimeout(ctx, defaultDaemonShutdownTimeout)
+			socketHealthy = daemonSocketHealthy(healthCtx, state.SocketPath) == nil
+			cancel()
+		}
+
+		logPath := strings.TrimSuffix(statePath, filepath.Ext(statePath)) + ".log"
+
+		ds := DaemonStatus{
+			WorkspaceRoot: state.WorkspaceRoot,
+			Language:      state.Language,
+			StateKey:      state.StateKey,
+			PID:           state.PID,
+			Binary:        state.Binary,
+			Running:       running,
+			SocketHealthy: socketHealthy,
+			LogPath:       logPath,
+		}
+		if state.StartedUnixNano != 0 {
+			ds.StartedAt = time.Unix(0, state.StartedUnixNano)
+		}
+		if state.LastUsedUnixNano != 0 {
+			ds.LastUsedAt = time.Unix(0, state.LastUsedUnixNano)
+		}
+
+		statuses = append(statuses, ds)
+	}
+
+	return statuses, nil
+}
+
 // Ensure reuses an active server for (workspace, language) or starts a new one.
 func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) (Lease, error) {
 	if l == nil {
@@ -163,7 +258,7 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 	if stateErr == nil {
 		if l.isIdle(state, now) {
 			_ = l.stopStateProcess(statePath, state)
-		} else if processAlive(state.PID) {
+		} else if processAlive(state.PID) && isCodesightProcess(state.PID) {
 			socketHealthCtx, cancel := context.WithTimeout(ctx, defaultDaemonShutdownTimeout)
 			socketErr := daemonSocketHealthy(socketHealthCtx, state.SocketPath)
 			cancel()
@@ -190,6 +285,15 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 		return Lease{}, fmt.Errorf("LSP required but %s not found. Install: %s", spec.Binary, spec.InstallHint)
 	}
 
+	args := append([]string(nil), spec.Args...)
+	if strings.TrimSpace(strings.ToLower(spec.Binary)) == "jdtls" {
+		dataDir := filepath.Join(filepath.Dir(statePath), "jdtls-data-"+stateKey)
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
+			return Lease{}, fmt.Errorf("create jdtls data directory: %w", err)
+		}
+		args = append(args, "-data", dataDir)
+	}
+
 	daemonConfig := daemonProcessConfig{
 		WorkspaceRoot: canonicalRoot,
 		Language:      spec.Language,
@@ -197,7 +301,7 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 		StatePath:     statePath,
 		SocketPath:    socketPath,
 		Binary:        spec.Binary,
-		Args:          append([]string(nil), spec.Args...),
+		Args:          args,
 		IdleTimeoutNS: int64(l.idleTimeout),
 	}
 	pid, err := launchDaemonProcess(ctx, daemonConfig)
@@ -218,7 +322,7 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 	}
 
 	if err := writeStateFile(statePath, state); err != nil {
-		_ = killProcess(state.PID)
+		_ = killProcessGroup(state.PID)
 		return Lease{}, err
 	}
 
@@ -233,6 +337,31 @@ func (l *Lifecycle) Stop(workspaceRoot, language string) error {
 	}
 	stateKey := StateKey(canonicalRoot, language)
 
+	lock := l.lockForKey(stateKey)
+	lock.Lock()
+	defer lock.Unlock()
+
+	statePath, err := l.statePathForKey(stateKey)
+	if err != nil {
+		return err
+	}
+
+	state, err := readStateFile(statePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		_ = removeStateArtifacts(statePath, socketPathForState(statePath, stateKey))
+		return nil
+	}
+
+	return l.stopStateProcess(statePath, state)
+}
+
+// StopByKey terminates and removes lifecycle state for an exact state key.
+// Use this when the state key may differ from what StateKey() computes
+// (e.g. legacy state files with full-length hashes).
+func (l *Lifecycle) StopByKey(stateKey string) error {
 	lock := l.lockForKey(stateKey)
 	lock.Lock()
 	defer lock.Unlock()
@@ -307,8 +436,12 @@ func (l *Lifecycle) ShutdownIdle(ctx context.Context) error {
 			lock.Unlock()
 			continue
 		}
-		if err := l.stopStateProcess(statePath, state); err != nil {
-			shutdownErrs = append(shutdownErrs, err)
+		if isCodesightProcess(state.PID) {
+			if err := l.stopStateProcess(statePath, state); err != nil {
+				shutdownErrs = append(shutdownErrs, err)
+			}
+		} else {
+			_ = removeStateArtifacts(statePath, socketPathForState(statePath, stateKey))
 		}
 		lock.Unlock()
 	}
@@ -404,8 +537,8 @@ func (l *Lifecycle) stopStateProcess(statePath string, state lifecycleState) err
 	cancel()
 
 	var stopErrs []error
-	if processAlive(state.PID) {
-		if err := killProcess(state.PID); err != nil {
+	if processAlive(state.PID) && isCodesightProcess(state.PID) {
+		if err := killProcessGroup(state.PID); err != nil {
 			stopErrs = append(stopErrs, err)
 		}
 	}
@@ -425,8 +558,12 @@ func removeStateArtifacts(statePath, socketPath string) error {
 			removeErrs = append(removeErrs, err)
 		}
 	}
-	logPath := strings.TrimSuffix(statePath, filepath.Ext(statePath)) + ".log"
-	_ = os.Remove(logPath)
+	// Remove the Gradle baseline file so that a restart triggers a fresh
+	// Gradle import instead of suppressing it based on stale state.
+	baselinePath := strings.TrimSuffix(statePath, lifecycleStateFileExtension) + javaGradleBaselineExtension
+	if err := os.Remove(baselinePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		removeErrs = append(removeErrs, err)
+	}
 	return errors.Join(removeErrs...)
 }
 
@@ -444,7 +581,7 @@ func canonicalWorkspaceRoot(workspaceRoot string) (string, error) {
 }
 
 func killProcess(pid int) error {
-	if pid <= 0 {
+	if pid <= 1 || pid == os.Getpid() {
 		return nil
 	}
 
@@ -452,10 +589,59 @@ func killProcess(pid int) error {
 	if err != nil {
 		return nil
 	}
+
 	if err := process.Kill(); err != nil && !isNoSuchProcess(err) && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 	return nil
+}
+
+func killProcessGroup(pid int) error {
+	if pid <= 1 || pid == os.Getpid() {
+		return nil
+	}
+
+	// Never kill our own process group.
+	if pgrp := syscall.Getpgrp(); pgrp == pid {
+		return nil
+	}
+
+	// Kill the entire process group (-pid) so child processes (e.g. jdtls)
+	// are also terminated. The daemon is started with Setsid, making it the
+	// process group leader. Falling back to single-process kill if the
+	// group kill fails (e.g. process already exited).
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !isNoSuchProcess(err) {
+		return killProcess(pid)
+	}
+	return nil
+}
+
+func isCodesightProcess(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err == nil {
+		base := filepath.Base(exe)
+		return isCodesightProcessName(base)
+	}
+
+	// Fallback for macOS/other systems where /proc isn't available
+	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "comm=").Output()
+	if err != nil {
+		return false
+	}
+	comm := strings.TrimSpace(string(out))
+	base := filepath.Base(comm)
+	return isCodesightProcessName(base)
+}
+
+func isCodesightProcessName(name string) bool {
+	return name == "cs" ||
+		name == "codesight" ||
+		strings.HasPrefix(name, "codesight-") ||
+		name == "lsp.test" ||
+		strings.HasSuffix(name, ".test")
 }
 
 func processAlive(pid int) bool {

@@ -73,6 +73,9 @@ func (e *CallersEngine) Find(ctx context.Context, opts CallersOptions) (string, 
 	if err != nil {
 		return "", fmt.Errorf("workspace/symbol request failed: %w", err)
 	}
+	if len(symbols) == 0 {
+		return "", fmt.Errorf("%w: %q", errLSPNoSymbols, symbol)
+	}
 
 	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, "")
 	if err != nil {

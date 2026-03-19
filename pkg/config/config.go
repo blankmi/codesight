@@ -27,7 +27,8 @@ const (
 	envMaxInputChars      = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
 	envStateDir           = "CODESIGHT_STATE_DIR"
 	envGradleJavaHome     = "CODESIGHT_GRADLE_JAVA_HOME"
-	envLSPDaemonTimeout   = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
+	envLSPDaemonTimeout        = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
+	envLSPWarmupProbeTimeout   = "CODESIGHT_LSP_DAEMON_WARMUP_PROBE_TIMEOUT"
 	defaultJavaTimeout    = "60s"
 	defaultDaemonTimeout  = "10m"
 	defaultDBType         = "milvus"
@@ -48,7 +49,8 @@ const (
 	keyLSPJavaTimeout    = "lsp.java.timeout"
 	keyLSPJavaArgs       = "lsp.java.args"
 	keyLSPGoBuildFlags   = "lsp.go.build_flags"
-	keyLSPDaemonTimeout  = "lsp.daemon.idle_timeout"
+	keyLSPDaemonTimeout       = "lsp.daemon.idle_timeout"
+	keyLSPWarmupProbeTimeout  = "lsp.daemon.warmup_probe_timeout"
 	keyIndexWarmLSP      = "index.warm_lsp"
 )
 
@@ -92,7 +94,8 @@ type GoLSPConfig struct {
 }
 
 type DaemonLSPConfig struct {
-	IdleTimeout string `toml:"idle_timeout"`
+	IdleTimeout        string `toml:"idle_timeout"`
+	WarmupProbeTimeout string `toml:"warmup_probe_timeout"`
 }
 
 type IndexConfig struct {
@@ -136,7 +139,8 @@ type layerGoLSPConfig struct {
 }
 
 type layerDaemonLSPConfig struct {
-	IdleTimeout *string `toml:"idle_timeout"`
+	IdleTimeout        *string `toml:"idle_timeout"`
+	WarmupProbeTimeout *string `toml:"warmup_probe_timeout"`
 }
 
 type layerIndexConfig struct {
@@ -345,6 +349,14 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 		cfg.Provenance[keyLSPDaemonTimeout] = source
 	}
 
+	if layer.LSP.Daemon.WarmupProbeTimeout != nil {
+		if _, err := parsePositiveDuration(*layer.LSP.Daemon.WarmupProbeTimeout, keyLSPWarmupProbeTimeout); err != nil {
+			return err
+		}
+		cfg.LSP.Daemon.WarmupProbeTimeout = strings.TrimSpace(*layer.LSP.Daemon.WarmupProbeTimeout)
+		cfg.Provenance[keyLSPWarmupProbeTimeout] = source
+	}
+
 	if layer.Index.WarmLSP != nil {
 		cfg.Index.WarmLSP = *layer.Index.WarmLSP
 		cfg.Provenance[keyIndexWarmLSP] = source
@@ -407,6 +419,17 @@ func applyEnv(cfg *Config) error {
 		}
 	}
 
+	if raw, ok := os.LookupEnv(envLSPWarmupProbeTimeout); ok {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed != "" {
+			if _, err := parsePositiveDuration(trimmed, keyLSPWarmupProbeTimeout); err != nil {
+				return err
+			}
+			cfg.LSP.Daemon.WarmupProbeTimeout = trimmed
+			cfg.Provenance[keyLSPWarmupProbeTimeout] = envLSPWarmupProbeTimeout
+		}
+	}
+
 	return nil
 }
 
@@ -433,6 +456,7 @@ func allConfigKeys() []string {
 		keyLSPJavaArgs,
 		keyLSPGoBuildFlags,
 		keyLSPDaemonTimeout,
+		keyLSPWarmupProbeTimeout,
 		keyIndexWarmLSP,
 	}
 }
@@ -442,6 +466,16 @@ func (cfg *Config) LSPDaemonIdleTimeoutDuration() (time.Duration, error) {
 		cfg = Defaults()
 	}
 	return parsePositiveDuration(cfg.LSP.Daemon.IdleTimeout, keyLSPDaemonTimeout)
+}
+
+func (cfg *Config) LSPWarmupProbeTimeoutDuration() (time.Duration, error) {
+	if cfg == nil {
+		cfg = Defaults()
+	}
+	if cfg.LSP.Daemon.WarmupProbeTimeout == "" {
+		return 0, nil
+	}
+	return parsePositiveDuration(cfg.LSP.Daemon.WarmupProbeTimeout, keyLSPWarmupProbeTimeout)
 }
 
 func parsePositiveDuration(raw string, key string) (time.Duration, error) {

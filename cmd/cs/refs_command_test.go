@@ -389,7 +389,7 @@ func TestExecuteRefsCommandEmitsColdStartHintForSlowJavaDaemonStart(t *testing.T
 		t.Fatalf("executeRefsCommand returned error: %v", err)
 	}
 
-	hint := "Tip: run 'cs warmup .' to pre-start the language server"
+	hint := "Tip: run 'cs lsp warmup .' to pre-start the language server"
 	if !strings.Contains(output, hint) {
 		t.Fatalf("refs output missing cold-start hint: %q", output)
 	}
@@ -450,7 +450,7 @@ func TestExecuteRefsCommandDoesNotEmitColdStartHintForWarmJavaDaemon(t *testing.
 		t.Fatalf("executeRefsCommand returned error: %v", err)
 	}
 
-	hint := "Tip: run 'cs warmup .' to pre-start the language server"
+	hint := "Tip: run 'cs lsp warmup .' to pre-start the language server"
 	if strings.Contains(output, hint) {
 		t.Fatalf("refs output unexpectedly included cold-start hint on warm daemon: %q", output)
 	}
@@ -511,7 +511,7 @@ func TestExecuteRefsCommandDoesNotEmitColdStartHintForNonJavaLanguage(t *testing
 		t.Fatalf("executeRefsCommand returned error: %v", err)
 	}
 
-	hint := "Tip: run 'cs warmup .' to pre-start the language server"
+	hint := "Tip: run 'cs lsp warmup .' to pre-start the language server"
 	if strings.Contains(output, hint) {
 		t.Fatalf("refs output unexpectedly included cold-start hint for non-java flow: %q", output)
 	}

@@ -216,7 +216,7 @@ func TestRootCommandIncludesExtractAndExistingCommands(t *testing.T) {
 		subcommands[cmd.Name()] = true
 	}
 
-	for _, want := range []string{"index", "search", "status", "clear", "extract", "refs", "callers", "implements", "warmup"} {
+	for _, want := range []string{"index", "search", "status", "clear", "extract", "refs", "callers", "implements", "lsp"} {
 		if !subcommands[want] {
 			t.Fatalf("root command is missing %q subcommand", want)
 		}

@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,6 +76,28 @@ func (s *stubCallersClient) Call(ctx context.Context, method string, params any,
 
 	default:
 		return fmt.Errorf("unexpected method %q", method)
+	}
+}
+
+func TestCallersEmptySymbolsReturnsNotIndexed(t *testing.T) {
+	client := &stubCallersClient{
+		workspaceSymbols: []SymbolInformation{},
+	}
+
+	engine := NewCallersEngine(client)
+	_, err := engine.Find(context.Background(), CallersOptions{
+		WorkspaceRoot: t.TempDir(),
+		Symbol:        "Target",
+		Depth:         1,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, errLSPNoSymbols) {
+		t.Fatalf("error = %v, want errLSPNoSymbols", err)
+	}
+	if errors.Is(err, errSymbolNotFound) {
+		t.Fatal("error should not be errSymbolNotFound")
 	}
 }
 

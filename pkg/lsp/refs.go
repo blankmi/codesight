@@ -46,6 +46,7 @@ type resolvedSymbol struct {
 
 var (
 	errSymbolNotFound                    = errors.New("symbol not found")
+	errLSPNoSymbols                      = errors.New("LSP returned no symbols — the language server may not have finished indexing")
 	defaultFallbackSearcher refsFallback = grepFallbackSearcher{}
 	allowedRefKinds                      = map[string]struct{}{
 		"function":  {},
@@ -261,7 +262,7 @@ func resolveCandidates(
 	candidates := make([]resolvedSymbol, 0, len(symbols))
 
 	for _, match := range symbols {
-		if match.Name != symbol {
+		if !isNameMatch(match.Name, symbol) {
 			continue
 		}
 		if kind != "" && !kindMatches(kind, match.Kind) {
@@ -295,6 +296,14 @@ func resolveCandidates(
 	})
 
 	return candidates, nil
+}
+
+func isNameMatch(matchName, searchName string) bool {
+	if matchName == searchName {
+		return true
+	}
+	// Handle Java-style method signatures: formatDate(Date) matches formatDate
+	return strings.HasPrefix(matchName, searchName+"(")
 }
 
 func kindMatches(kind string, symbolKind SymbolKind) bool {
