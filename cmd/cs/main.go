@@ -109,18 +109,21 @@ var clearCmd = &cobra.Command{
 
 type refsCommandOptions struct {
 	WorkspaceRoot string
+	FilterPath    string
 	Symbol        string
 	Kind          string
 }
 
 type callersCommandOptions struct {
 	WorkspaceRoot string
+	FilterPath    string
 	Symbol        string
 	Depth         int
 }
 
 type implementsCommandOptions struct {
 	WorkspaceRoot string
+	FilterPath    string
 	Symbol        string
 }
 
@@ -600,13 +603,26 @@ func runRefs(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	workspaceRoot, err := resolveRefsWorkspaceRoot(pathFlag)
+	targetPath, err := resolveRefsWorkspaceRoot(pathFlag)
 	if err != nil {
 		return err
 	}
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return err
+	}
+	absTarget = filepath.Clean(absTarget)
+
+	workspaceRoot := findProjectRoot(absTarget)
+	absRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	absRoot = filepath.Clean(absRoot)
 
 	output, err := runRefsCommand(cmd.Context(), refsCommandOptions{
-		WorkspaceRoot: workspaceRoot,
+		WorkspaceRoot: absRoot,
+		FilterPath:    absTarget,
 		Symbol:        args[0],
 		Kind:          kind,
 	})
@@ -633,13 +649,26 @@ func runCallers(cmd *cobra.Command, args []string) error {
 		return errors.New("depth must be a positive integer")
 	}
 
-	workspaceRoot, err := resolveRefsWorkspaceRoot(pathFlag)
+	targetPath, err := resolveRefsWorkspaceRoot(pathFlag)
 	if err != nil {
 		return err
 	}
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return err
+	}
+	absTarget = filepath.Clean(absTarget)
+
+	workspaceRoot := findProjectRoot(absTarget)
+	absRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	absRoot = filepath.Clean(absRoot)
 
 	output, err := runCallersCommand(cmd.Context(), callersCommandOptions{
-		WorkspaceRoot: workspaceRoot,
+		WorkspaceRoot: absRoot,
+		FilterPath:    absTarget,
 		Symbol:        args[0],
 		Depth:         depth,
 	})
@@ -659,13 +688,26 @@ func runImplements(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	workspaceRoot, err := resolveRefsWorkspaceRoot(pathFlag)
+	targetPath, err := resolveRefsWorkspaceRoot(pathFlag)
 	if err != nil {
 		return err
 	}
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return err
+	}
+	absTarget = filepath.Clean(absTarget)
+
+	workspaceRoot := findProjectRoot(absTarget)
+	absRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	absRoot = filepath.Clean(absRoot)
 
 	output, err := runImplementsCommand(cmd.Context(), implementsCommandOptions{
-		WorkspaceRoot: workspaceRoot,
+		WorkspaceRoot: absRoot,
+		FilterPath:    absTarget,
 		Symbol:        args[0],
 	})
 	if err != nil {
@@ -688,19 +730,53 @@ func resolveRefsWorkspaceRoot(pathFlag string) (string, error) {
 		target = workingDirectory
 	}
 
-	workspaceRoot, err := resolveProjectPath(target)
+	absPath, err := resolveProjectPath(target)
 	if err != nil {
 		return "", err
 	}
 
-	info, err := os.Stat(workspaceRoot)
+	info, err := os.Stat(absPath)
 	if err != nil {
 		return "", err
 	}
-	if info.IsDir() {
-		return workspaceRoot, nil
+	if !info.IsDir() {
+		absPath = filepath.Dir(absPath)
 	}
-	return filepath.Dir(workspaceRoot), nil
+
+	return absPath, nil
+}
+
+func findProjectRoot(path string) string {
+	markers := []string{
+		".codesight",
+		".csignore",
+		"build.gradle.kts",
+		"build.gradle",
+		"pom.xml",
+		"settings.gradle.kts",
+		"settings.gradle",
+		"go.mod",
+		"package.json",
+		"Cargo.toml",
+		".git",
+	}
+
+	curr := path
+	for {
+		for _, m := range markers {
+			if _, err := os.Stat(filepath.Join(curr, m)); err == nil {
+				return curr
+			}
+		}
+
+		parent := filepath.Dir(curr)
+		if parent == curr {
+			break
+		}
+		curr = parent
+	}
+
+	return path
 }
 
 func startRefsLSPClient(

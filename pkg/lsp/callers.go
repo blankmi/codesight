@@ -15,6 +15,7 @@ type callersClient interface {
 // CallersOptions configures one callers lookup.
 type CallersOptions struct {
 	WorkspaceRoot string
+	FilterPath    string
 	Symbol        string
 	Depth         int
 	LSPBinary     string
@@ -77,7 +78,7 @@ func (e *CallersEngine) Find(ctx context.Context, opts CallersOptions) (string, 
 		return "", fmt.Errorf("%w: %q", errLSPNoSymbols, symbol)
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, "")
+	candidates, err := resolveCandidates(symbols, workspaceRoot, opts.FilterPath, matcher, symbol, "")
 	if err != nil {
 		return "", err
 	}

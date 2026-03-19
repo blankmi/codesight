@@ -23,6 +23,7 @@ type refsFallback interface {
 
 type RefsOptions struct {
 	WorkspaceRoot string
+	FilterPath    string
 	Symbol        string
 	Kind          string
 	FallbackLSP   string
@@ -138,7 +139,7 @@ func (e *RefsEngine) Find(ctx context.Context, opts RefsOptions) (string, error)
 	}
 
 	if e.client != nil {
-		output, err := e.findWithLSP(ctx, workspaceRoot, symbol, kind)
+		output, err := e.findWithLSP(ctx, workspaceRoot, opts.FilterPath, symbol, kind)
 		if err == nil {
 			return output, nil
 		}
@@ -163,6 +164,7 @@ func (e *RefsEngine) Find(ctx context.Context, opts RefsOptions) (string, error)
 func (e *RefsEngine) findWithLSP(
 	ctx context.Context,
 	workspaceRoot string,
+	filterPath string,
 	symbol string,
 	kind string,
 ) (string, error) {
@@ -189,7 +191,7 @@ func (e *RefsEngine) findWithLSP(
 		}
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, kind)
+	candidates, err := resolveCandidates(symbols, workspaceRoot, filterPath, matcher, symbol, kind)
 	if err != nil {
 		return "", err
 	}
@@ -255,6 +257,7 @@ func (e *RefsEngine) lookupReferences(ctx context.Context, symbol SymbolInformat
 func resolveCandidates(
 	symbols []SymbolInformation,
 	workspaceRoot string,
+	filterPath string,
 	matcher interface{ MatchesPath(string) bool },
 	symbol string,
 	kind string,
@@ -274,6 +277,11 @@ func resolveCandidates(
 			return nil, err
 		}
 		if matcher != nil && matcher.MatchesPath(path) {
+			continue
+		}
+
+		// Filter by path if requested.
+		if filterPath != "" && !strings.HasPrefix(path, filterPath) {
 			continue
 		}
 

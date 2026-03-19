@@ -21,6 +21,7 @@ type implementsClient interface {
 // ImplementsOptions configures one implementations lookup.
 type ImplementsOptions struct {
 	WorkspaceRoot string
+	FilterPath    string
 	Symbol        string
 	LSPBinary     string
 	LSPInstall    string
@@ -86,7 +87,7 @@ func (e *ImplementsEngine) Find(ctx context.Context, opts ImplementsOptions) (st
 		return "", fmt.Errorf("%w: %q", errLSPNoSymbols, symbol)
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, matcher, symbol, "")
+	candidates, err := resolveCandidates(symbols, workspaceRoot, opts.FilterPath, matcher, symbol, "")
 	if err != nil {
 		return "", err
 	}

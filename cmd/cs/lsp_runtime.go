@@ -137,6 +137,7 @@ func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, e
 	var release func()
 	var emitColdStartHint bool
 
+	// Always use the discovered project root for language detection and daemon connection.
 	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
 	if err != nil {
 		if !errors.Is(err, errNoSupportedRefsLanguage) {
@@ -168,6 +169,7 @@ func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, e
 	}
 	output, err := engine.Find(ctx, lsp.RefsOptions{
 		WorkspaceRoot: opts.WorkspaceRoot,
+		FilterPath:    opts.FilterPath,
 		Symbol:        opts.Symbol,
 		Kind:          opts.Kind,
 		FallbackLSP:   fallbackBinary,
@@ -185,6 +187,7 @@ func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (str
 	registry := lsp.NewRegistry()
 	runtime := newLSPCommandRuntime(registry)
 
+	// Always use the discovered project root for language detection and daemon connection.
 	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
 	if err != nil {
 		return "", err
@@ -212,6 +215,7 @@ func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (str
 
 	return lsp.NewCallersEngine(client).Find(ctx, lsp.CallersOptions{
 		WorkspaceRoot: opts.WorkspaceRoot,
+		FilterPath:    opts.FilterPath,
 		Symbol:        opts.Symbol,
 		Depth:         opts.Depth,
 		LSPBinary:     spec.Binary,
@@ -223,6 +227,7 @@ func executeImplementsCommand(ctx context.Context, opts implementsCommandOptions
 	registry := lsp.NewRegistry()
 	runtime := newLSPCommandRuntime(registry)
 
+	// Always use the discovered project root for language detection and daemon connection.
 	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
 	if err != nil {
 		return "", err
@@ -250,6 +255,7 @@ func executeImplementsCommand(ctx context.Context, opts implementsCommandOptions
 
 	return lsp.NewImplementsEngine(client).Find(ctx, lsp.ImplementsOptions{
 		WorkspaceRoot: opts.WorkspaceRoot,
+		FilterPath:    opts.FilterPath,
 		Symbol:        opts.Symbol,
 		LSPBinary:     spec.Binary,
 		LSPInstall:    spec.InstallHint,
