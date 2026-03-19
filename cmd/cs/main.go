@@ -30,6 +30,7 @@ import (
 
 const (
 	interactiveNetworkTimeout = 1 * time.Second
+	interactiveSearchTimeout  = 15 * time.Second
 	refsLSPShutdownTimeout    = 2 * time.Second
 )
 
@@ -325,10 +326,30 @@ func wrapEmbedderConnectErrorForConfig(cfg *configpkg.Config, err error) error {
 	if err == nil {
 		return nil
 	}
+	if !isEmbedderConnectError(err) {
+		return err
+	}
 	return fmt.Errorf(
 		"cs: Ollama not reachable at %s (model %s). Set CODESIGHT_OLLAMA_HOST or start Ollama: %w",
 		cfg.Embedding.OllamaHost, cfg.Embedding.Model, err,
 	)
+}
+
+func isEmbedderConnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isTimeoutError(err) {
+		return true
+	}
+
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
 }
 
 func isTimeoutError(err error) bool {
@@ -542,7 +563,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	var output *pkg.SearchOutput
-	if err := runWithTimeout(interactiveNetworkTimeout, "running search", func(ctx context.Context) error {
+	if err := runWithTimeout(interactiveSearchTimeout, "running search", func(ctx context.Context) error {
 		var err error
 		output, err = searcher.Search(ctx, pkg.SearchOptions{
 			Path:       searchPath,

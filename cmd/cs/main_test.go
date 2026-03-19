@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -57,6 +58,12 @@ func TestRunWithTimeoutPassesThroughNonTimeoutErrors(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "network access may be blocked") {
 		t.Fatalf("unexpected timeout hint in error: %v", err)
+	}
+}
+
+func TestInteractiveSearchTimeoutExceedsNetworkProbeTimeout(t *testing.T) {
+	if interactiveSearchTimeout <= interactiveNetworkTimeout {
+		t.Fatalf("interactiveSearchTimeout = %s, want greater than interactiveNetworkTimeout = %s", interactiveSearchTimeout, interactiveNetworkTimeout)
 	}
 }
 
@@ -185,7 +192,11 @@ func TestWrapEmbedderConnectErrorIncludesHostAndModel(t *testing.T) {
 	cfg.Embedding.OllamaHost = "http://ollama.local:11434"
 	cfg.Embedding.Model = "custom-embed"
 
-	err := wrapEmbedderConnectErrorForConfig(cfg, errors.New("connection refused"))
+	err := wrapEmbedderConnectErrorForConfig(cfg, &url.Error{
+		Op:  "Post",
+		URL: "http://ollama.local:11434/api/embed",
+		Err: context.DeadlineExceeded,
+	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -201,6 +212,19 @@ func TestWrapEmbedderConnectErrorIncludesHostAndModel(t *testing.T) {
 	}
 	if !strings.Contains(msg, "CODESIGHT_OLLAMA_HOST") {
 		t.Fatalf("expected env var hint in error, got: %s", msg)
+	}
+}
+
+func TestWrapEmbedderConnectErrorPassesThroughNonConnectivityErrors(t *testing.T) {
+	cfg := configpkg.Defaults()
+	want := errors.New("no index found for /tmp/project -- run 'cs index' first")
+
+	err := wrapEmbedderConnectErrorForConfig(cfg, want)
+	if !errors.Is(err, want) {
+		t.Fatalf("expected original error %v, got %v", want, err)
+	}
+	if strings.Contains(err.Error(), "Ollama not reachable") {
+		t.Fatalf("unexpected Ollama wrapper for non-connectivity error: %v", err)
 	}
 }
 
@@ -220,6 +244,25 @@ func TestRootCommandIncludesExtractAndExistingCommands(t *testing.T) {
 		if !subcommands[want] {
 			t.Fatalf("root command is missing %q subcommand", want)
 		}
+	}
+}
+
+func TestRootCommandWithoutArgsShowsHelp(t *testing.T) {
+	clearTestEnv(t)
+	setTestHome(t)
+
+	stdout, stderr, err := executeRootCommand(t)
+	if err != nil {
+		t.Fatalf("root command returned error: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Usage:\n  cs [command]") {
+		t.Fatalf("stdout missing usage: %q", stdout)
+	}
+	if !strings.Contains(stdout, "Available Commands:") {
+		t.Fatalf("stdout missing available commands: %q", stdout)
 	}
 }
 
