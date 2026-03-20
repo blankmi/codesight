@@ -558,9 +558,14 @@ func removeStateArtifacts(statePath, socketPath string) error {
 			removeErrs = append(removeErrs, err)
 		}
 	}
+	artifactBase := strings.TrimSuffix(statePath, lifecycleStateFileExtension)
+	logPath := artifactBase + daemonLogFileExtension
+	if err := os.Remove(logPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		removeErrs = append(removeErrs, err)
+	}
 	// Remove the Gradle baseline file so that a restart triggers a fresh
 	// Gradle import instead of suppressing it based on stale state.
-	baselinePath := strings.TrimSuffix(statePath, lifecycleStateFileExtension) + javaGradleBaselineExtension
+	baselinePath := artifactBase + javaGradleBaselineExtension
 	if err := os.Remove(baselinePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		removeErrs = append(removeErrs, err)
 	}

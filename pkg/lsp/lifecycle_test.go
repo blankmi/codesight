@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -741,5 +742,30 @@ func TestLifecycleStopMissingStateIsNoop(t *testing.T) {
 	err := lifecycle.Stop(workspace, "go")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Stop returned unexpected error: %v", err)
+	}
+}
+
+func TestRemoveStateArtifactsRemovesLogAndBaselineFiles(t *testing.T) {
+	stateDir := t.TempDir()
+	statePath := filepath.Join(stateDir, "daemon"+lifecycleStateFileExtension)
+	socketPath := filepath.Join(stateDir, "daemon.sock")
+	artifactBase := strings.TrimSuffix(statePath, lifecycleStateFileExtension)
+	logPath := artifactBase + daemonLogFileExtension
+	baselinePath := artifactBase + javaGradleBaselineExtension
+
+	for _, path := range []string{statePath, socketPath, logPath, baselinePath} {
+		if err := os.WriteFile(path, []byte("artifact"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile(%q) returned error: %v", path, err)
+		}
+	}
+
+	if err := removeStateArtifacts(statePath, socketPath); err != nil {
+		t.Fatalf("removeStateArtifacts returned error: %v", err)
+	}
+
+	for _, path := range []string{statePath, socketPath, logPath, baselinePath} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected %q to be removed, got err: %v", path, err)
+		}
 	}
 }
