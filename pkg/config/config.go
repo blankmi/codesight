@@ -580,10 +580,7 @@ func (cfg *Config) LSPDaemonIdleTimeoutDuration() (time.Duration, error) {
 }
 
 func (cfg *Config) LSPWarmupProbeTimeoutDuration() (time.Duration, error) {
-	if cfg == nil {
-		cfg = Defaults()
-	}
-	if cfg.LSP.Daemon.WarmupProbeTimeout == "" {
+	if cfg == nil || cfg.LSP.Daemon.WarmupProbeTimeout == "" {
 		return 0, nil
 	}
 	return parsePositiveDuration(cfg.LSP.Daemon.WarmupProbeTimeout, keyLSPWarmupProbeTimeout)

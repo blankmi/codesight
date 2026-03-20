@@ -43,15 +43,15 @@ func init() {
 	lspCmd.AddCommand(lspWarmupCmd, lspStatusCmd, lspRestartCmd)
 }
 
-var runWarmupCommand = executeWarmupCommand
+var runLSPCommand = executeLSPCommand
 
-type warmupCommandOptions struct {
+type lspCommandOptions struct {
 	WorkspaceRoot string
 	Status        bool
 	Restart       bool
 }
 
-type warmupCommandResult struct {
+type lspCommandResult struct {
 	WorkspaceRoot string
 	Language      string
 	Supported     bool
@@ -62,7 +62,7 @@ type warmupCommandResult struct {
 func runLSPWarmup(cmd *cobra.Command, args []string) error {
 	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
 
-	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
+	result, err := runLSPCommand(cmd.Context(), lspCommandOptions{
 		WorkspaceRoot: workspaceRoot,
 	})
 	if err != nil {
@@ -86,7 +86,7 @@ func runLSPWarmup(cmd *cobra.Command, args []string) error {
 func runLSPStatus(cmd *cobra.Command, args []string) error {
 	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
 
-	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
+	result, err := runLSPCommand(cmd.Context(), lspCommandOptions{
 		WorkspaceRoot: workspaceRoot,
 		Status:        true,
 	})
@@ -118,7 +118,7 @@ func runLSPStatus(cmd *cobra.Command, args []string) error {
 func runLSPRestart(cmd *cobra.Command, args []string) error {
 	workspaceRoot := resolvedProjectRootForTarget(currentTargetDir())
 
-	result, err := runWarmupCommand(cmd.Context(), warmupCommandOptions{
+	result, err := runLSPCommand(cmd.Context(), lspCommandOptions{
 		WorkspaceRoot: workspaceRoot,
 		Restart:       true,
 	})
@@ -181,19 +181,19 @@ func shortenHome(path string) string {
 	return path
 }
 
-func executeWarmupCommand(ctx context.Context, opts warmupCommandOptions) (warmupCommandResult, error) {
+func executeLSPCommand(ctx context.Context, opts lspCommandOptions) (lspCommandResult, error) {
 	registry := lsp.NewRegistry()
 
 	if opts.Status {
 		lifecycle := lsp.NewLifecycle(registry)
 		statuses, err := lifecycle.Status(ctx, opts.WorkspaceRoot)
 		if err != nil {
-			return warmupCommandResult{}, err
+			return lspCommandResult{}, err
 		}
 		if statuses == nil {
 			statuses = []lsp.DaemonStatus{}
 		}
-		return warmupCommandResult{
+		return lspCommandResult{
 			WorkspaceRoot: opts.WorkspaceRoot,
 			Statuses:      statuses,
 		}, nil
@@ -203,18 +203,18 @@ func executeWarmupCommand(ctx context.Context, opts warmupCommandOptions) (warmu
 		language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
 		if err != nil {
 			if errors.Is(err, errNoSupportedRefsLanguage) {
-				return warmupCommandResult{
+				return lspCommandResult{
 					WorkspaceRoot: opts.WorkspaceRoot,
 					Supported:     false,
 				}, nil
 			}
-			return warmupCommandResult{}, err
+			return lspCommandResult{}, err
 		}
 
 		lifecycle := lsp.NewLifecycle(registry)
 		statuses, err := lifecycle.Status(ctx, opts.WorkspaceRoot)
 		if err != nil {
-			return warmupCommandResult{}, err
+			return lspCommandResult{}, err
 		}
 		for _, s := range statuses {
 			_ = lifecycle.StopByKey(s.StateKey)
@@ -224,16 +224,16 @@ func executeWarmupCommand(ctx context.Context, opts warmupCommandOptions) (warmu
 		// proper workspace folders, Gradle config, and JDK settings.
 		spec, err := registry.Lookup(language)
 		if err != nil {
-			return warmupCommandResult{}, err
+			return lspCommandResult{}, err
 		}
 		runtime := newLSPCommandRuntime(registry)
 		_, release, _, err := runtime.connectClientWithMetadata(ctx, opts.WorkspaceRoot, spec)
 		if err != nil {
-			return warmupCommandResult{}, err
+			return lspCommandResult{}, err
 		}
 		release()
 
-		return warmupCommandResult{
+		return lspCommandResult{
 			WorkspaceRoot: opts.WorkspaceRoot,
 			Language:      language,
 			Supported:     true,
@@ -244,21 +244,21 @@ func executeWarmupCommand(ctx context.Context, opts warmupCommandOptions) (warmu
 	language, err := detectRefsLanguage(opts.WorkspaceRoot, registry)
 	if err != nil {
 		if errors.Is(err, errNoSupportedRefsLanguage) {
-			return warmupCommandResult{
+			return lspCommandResult{
 				WorkspaceRoot: opts.WorkspaceRoot,
 				Supported:     false,
 			}, nil
 		}
-		return warmupCommandResult{}, err
+		return lspCommandResult{}, err
 	}
 
 	cfg, _ := configpkg.LoadConfig(opts.WorkspaceRoot)
 
 	if err := executeLSPWarmupWithRegistry(ctx, registry, opts.WorkspaceRoot, language, cfg); err != nil {
-		return warmupCommandResult{}, err
+		return lspCommandResult{}, err
 	}
 
-	return warmupCommandResult{
+	return lspCommandResult{
 		WorkspaceRoot: opts.WorkspaceRoot,
 		Language:      language,
 		Supported:     true,

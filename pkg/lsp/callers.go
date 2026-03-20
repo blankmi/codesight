@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -78,7 +79,7 @@ func (e *CallersEngine) Find(ctx context.Context, opts CallersOptions) (string, 
 		return "", fmt.Errorf("%w: %q", errLSPNoSymbols, symbol)
 	}
 
-	candidates, err := resolveCandidates(symbols, workspaceRoot, opts.FilterPath, matcher, symbol, "")
+	candidates, err := resolveCallersCandidates(symbols, workspaceRoot, opts.FilterPath, matcher, symbol)
 	if err != nil {
 		return "", err
 	}
@@ -150,6 +151,165 @@ func (e *CallersEngine) lookupSymbols(ctx context.Context, symbol string) ([]Sym
 		return nil, err
 	}
 	return symbols, nil
+}
+
+func resolveCallersCandidates(
+	symbols []SymbolInformation,
+	workspaceRoot string,
+	filterPath string,
+	matcher interface{ MatchesPath(string) bool },
+	symbol string,
+) ([]resolvedSymbol, error) {
+	candidates := make([]resolvedSymbol, 0, len(symbols))
+
+	for _, match := range symbols {
+		if !callersSymbolMatches(match, symbol) {
+			continue
+		}
+		if !isCallHierarchySymbolKind(match.Kind) {
+			continue
+		}
+
+		path, err := documentURIToPath(match.Location.URI)
+		if err != nil {
+			return nil, err
+		}
+		if matcher != nil && matcher.MatchesPath(path) {
+			continue
+		}
+		if filterPath != "" {
+			if path != filterPath && !strings.HasPrefix(path, filterPath+string(filepath.Separator)) {
+				continue
+			}
+		}
+
+		candidates = append(candidates, resolvedSymbol{
+			info: match,
+			path: relativePath(workspaceRoot, path),
+			line: match.Location.Range.Start.Line + 1,
+			kind: symbolKindLabel(match.Kind),
+		})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].path != candidates[j].path {
+			return candidates[i].path < candidates[j].path
+		}
+		if candidates[i].line != candidates[j].line {
+			return candidates[i].line < candidates[j].line
+		}
+		return candidates[i].kind < candidates[j].kind
+	})
+
+	return candidates, nil
+}
+
+func callersSymbolMatches(match SymbolInformation, search string) bool {
+	if symbolLookupNameMatches(match.Name, search) {
+		return true
+	}
+
+	container := strings.TrimSpace(match.ContainerName)
+	if container == "" {
+		return false
+	}
+
+	base := symbolLookupBaseName(match.Name)
+	if base == "" {
+		return false
+	}
+
+	return symbolLookupNameMatches(container+"."+base, search)
+}
+
+func symbolLookupNameMatches(matchName, searchName string) bool {
+	matchFull := symbolLookupTrimmedName(matchName)
+	searchFull := symbolLookupTrimmedName(searchName)
+	if matchFull == "" || searchFull == "" {
+		return false
+	}
+	if matchFull == searchFull {
+		return true
+	}
+
+	matchBase := symbolLookupBaseName(matchFull)
+	searchBase := symbolLookupBaseName(searchFull)
+	if matchBase == "" || searchBase == "" || matchBase != searchBase {
+		return false
+	}
+
+	if !strings.Contains(searchFull, ".") {
+		return true
+	}
+
+	return sameSymbolLookupContainer(
+		symbolLookupContainer(matchFull),
+		symbolLookupContainer(searchFull),
+	)
+}
+
+func symbolLookupTrimmedName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+
+	start := 0
+	if dot := strings.LastIndex(trimmed, "."); dot >= 0 {
+		start = dot + 1
+	}
+	if sig := strings.Index(trimmed[start:], "("); sig >= 0 {
+		return trimmed[:start+sig]
+	}
+
+	return trimmed
+}
+
+func symbolLookupBaseName(name string) string {
+	trimmed := symbolLookupTrimmedName(name)
+	if trimmed == "" {
+		return ""
+	}
+	if dot := strings.LastIndex(trimmed, "."); dot >= 0 {
+		return trimmed[dot+1:]
+	}
+	return trimmed
+}
+
+func symbolLookupContainer(name string) string {
+	trimmed := symbolLookupTrimmedName(name)
+	if trimmed == "" {
+		return ""
+	}
+	if dot := strings.LastIndex(trimmed, "."); dot >= 0 {
+		return trimmed[:dot]
+	}
+	return ""
+}
+
+func sameSymbolLookupContainer(left string, right string) bool {
+	return normalizeSymbolLookupContainer(left) == normalizeSymbolLookupContainer(right)
+}
+
+func normalizeSymbolLookupContainer(name string) string {
+	normalized := strings.TrimSpace(name)
+	for strings.HasPrefix(normalized, "(") && strings.HasSuffix(normalized, ")") {
+		normalized = strings.TrimSpace(normalized[1 : len(normalized)-1])
+	}
+	normalized = strings.TrimPrefix(normalized, "*")
+	for strings.HasPrefix(normalized, "(") && strings.HasSuffix(normalized, ")") {
+		normalized = strings.TrimSpace(normalized[1 : len(normalized)-1])
+	}
+	return normalized
+}
+
+func isCallHierarchySymbolKind(kind SymbolKind) bool {
+	switch kind {
+	case SymbolKindFunction, SymbolKindMethod, SymbolKindConstructor:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *CallersEngine) prepareCallHierarchy(

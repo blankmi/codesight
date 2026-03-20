@@ -101,6 +101,62 @@ func TestCallersEmptySymbolsReturnsNotIndexed(t *testing.T) {
 	}
 }
 
+func TestCallersSymbolMatchesQualifiedMethods(t *testing.T) {
+	tests := []struct {
+		name   string
+		match  SymbolInformation
+		search string
+		want   bool
+	}{
+		{
+			name: "qualified method matches bare lookup",
+			match: SymbolInformation{
+				Name: "Indexer.Index",
+				Kind: SymbolKindMethod,
+			},
+			search: "Index",
+			want:   true,
+		},
+		{
+			name: "container name supports qualified lookup",
+			match: SymbolInformation{
+				Name:          "Index",
+				Kind:          SymbolKindMethod,
+				ContainerName: "Indexer",
+			},
+			search: "Indexer.Index",
+			want:   true,
+		},
+		{
+			name: "pointer receiver matches value receiver lookup",
+			match: SymbolInformation{
+				Name: "(*Indexer).Index",
+				Kind: SymbolKindMethod,
+			},
+			search: "Indexer.Index",
+			want:   true,
+		},
+		{
+			name: "different container does not match qualified lookup",
+			match: SymbolInformation{
+				Name: "Other.Index",
+				Kind: SymbolKindMethod,
+			},
+			search: "Indexer.Index",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := callersSymbolMatches(tt.match, tt.search)
+			if got != tt.want {
+				t.Fatalf("callersSymbolMatches(%+v, %q) = %v, want %v", tt.match, tt.search, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCallersAmbiguousSymbolDeterministicOrdering(t *testing.T) {
 	root := t.TempDir()
 	client := &stubCallersClient{
@@ -195,6 +251,73 @@ func TestCallersDepthOneFormatting(t *testing.T) {
 		"  <- alphaCaller (alpha.go:13)",
 		"  <- bravoCaller (bravo.go:21)",
 		"2 callers (depth 1)",
+	}, "\n")
+	if output != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)
+	}
+
+	wantMethods := []string{
+		MethodWorkspaceSymbol,
+		MethodTextDocumentPrepareCallHierarchy,
+		MethodCallHierarchyIncomingCalls,
+	}
+	if !slices.Equal(client.methods, wantMethods) {
+		t.Fatalf("method order = %v, want %v", client.methods, wantMethods)
+	}
+}
+
+func TestCallersBareMethodNameSkipsNonCallableMatches(t *testing.T) {
+	root := t.TempDir()
+	targetPath := filepath.Join(root, "target.go")
+	configPath := filepath.Join(root, "config.go")
+	callerPath := filepath.Join(root, "caller.go")
+
+	rootItem := callersHierarchyItem(targetPath, "Indexer.Index", 9)
+	client := &stubCallersClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "Config.Index",
+				Kind: SymbolKindField,
+				Location: Location{
+					URI: callersFileURI(configPath),
+					Range: Range{
+						Start: Position{Line: 3},
+					},
+				},
+			},
+			{
+				Name: "Indexer.Index",
+				Kind: SymbolKindMethod,
+				Location: Location{
+					URI: callersFileURI(targetPath),
+					Range: Range{
+						Start: Position{Line: 9},
+					},
+				},
+			},
+		},
+		prepareItems: []CallHierarchyItem{rootItem},
+		incomingByItem: map[string][]CallHierarchyIncomingCall{
+			stubCallHierarchyKey(rootItem): {
+				callersIncomingCall(callerPath, "runIndex", 20),
+			},
+		},
+	}
+
+	engine := NewCallersEngine(client)
+	output, err := engine.Find(context.Background(), CallersOptions{
+		WorkspaceRoot: root,
+		Symbol:        "Index",
+		Depth:         1,
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := strings.Join([]string{
+		"Indexer.Index (target.go:10)",
+		"  <- runIndex (caller.go:21)",
+		"1 callers (depth 1)",
 	}, "\n")
 	if output != want {
 		t.Fatalf("output mismatch\n got: %q\nwant: %q", output, want)

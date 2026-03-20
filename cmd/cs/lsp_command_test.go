@@ -254,7 +254,7 @@ func TestWarmupStatusNoDaemon(t *testing.T) {
 	t.Setenv("CODESIGHT_STATE_DIR", t.TempDir())
 
 	workspace := t.TempDir()
-	result, err := executeWarmupCommand(context.Background(), warmupCommandOptions{
+	result, err := executeLSPCommand(context.Background(), lspCommandOptions{
 		WorkspaceRoot: workspace,
 		Status:        true,
 	})
@@ -315,7 +315,7 @@ func TestWarmupStatusWithDaemon(t *testing.T) {
 		t.Fatalf("os.WriteFile returned error: %v", err)
 	}
 
-	result, err := executeWarmupCommand(context.Background(), warmupCommandOptions{
+	result, err := executeLSPCommand(context.Background(), lspCommandOptions{
 		WorkspaceRoot: workspaceAbs,
 		Status:        true,
 	})

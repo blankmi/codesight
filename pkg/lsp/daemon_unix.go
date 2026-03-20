@@ -234,7 +234,7 @@ func runDaemon(config daemonProcessConfig) error {
 		_ = serverStdin.Close()
 		return fmt.Errorf("create language-server stdout pipe: %w", err)
 	}
-	serverCmd.Stderr = os.Stderr
+	serverCmd.Stderr = daemonLogWriter(config.StatePath)
 
 	if err := serverCmd.Start(); err != nil {
 		_ = listener.Close()
