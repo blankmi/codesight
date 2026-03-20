@@ -2,6 +2,20 @@
 - **Last verified**: 2026-03-17
 - **Source**: mixed
 
+## Mandatory Search Protocol
+- **Search** → `Grep`. Always start here for text, identifiers, patterns, class names, file locations.
+- **Understand** → `cs search "<query>" --path .` via Bash. Only for conceptual questions when you don't know which files matter (e.g. "how does X work?"). Do NOT use for finding known classes/methods — use Grep.
+- **References** → `cs refs <symbol> --path <dir>` via Bash. Find all references to a symbol across files.
+- **Call hierarchy** → `cs callers <symbol> --path <dir>` via Bash. Trace who calls a function.
+- **Implementations** → `cs implements <symbol> --path <dir>` via Bash. Find implementations of an interface/type.
+- **Find files** → `Glob`.
+
+When reading a specific symbol from a large file (>200 lines), prefer `cs extract -f <file> -s <symbol>` over Read.
+
+Do NOT use cs search to locate a file or find a known class/method — Grep is faster.
+Do NOT read 5+ files to understand a feature — cs search ranks them for you.
+Do NOT spawn Agent subagents to explore the codebase — use cs search + targeted reads instead.
+
 ## Core Documentation
 - Architecture: `/.context/architecture/system_overview.md`, `/.context/architecture/module_map.md`
 - Engineering: `/.context/engineering/build_test_run.md`, `/.context/engineering/ci_cd.md`
