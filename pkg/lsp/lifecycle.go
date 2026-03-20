@@ -409,6 +409,64 @@ func (l *Lifecycle) StopByKey(stateKey string) error {
 	return l.stopStateProcess(statePath, state)
 }
 
+// Cleanup scans the state directory and removes artifacts for daemons that are
+// no longer running. This includes state files, logs, and socket files that
+// were not cleaned up due to abrupt crashes or manual process termination.
+func (l *Lifecycle) Cleanup(ctx context.Context) ([]string, error) {
+	if l == nil {
+		return nil, errors.New("lifecycle is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = ctx // Avoid ineffassign if ctx is otherwise unused in future iterations
+
+	stateRoot, err := l.stateRoot()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(stateRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var cleaned []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != lifecycleStateFileExtension {
+			continue
+		}
+
+		statePath := filepath.Join(stateRoot, entry.Name())
+		state, err := readStateFile(statePath)
+		if err != nil {
+			// If we can't read the state file, it's corrupt; clean it up.
+			_ = removeStateArtifacts(statePath, "")
+			cleaned = append(cleaned, entry.Name())
+			continue
+		}
+
+		alive := processAlive(state.PID)
+		running := alive
+		if hasStrongProcessIdentity(state) {
+			running = processMatchesState(state)
+		}
+
+		if !running {
+			// Daemon is dead; clean up its artifacts.
+			socketPath := socketPathForState(statePath, state.StateKey)
+			if err := removeStateArtifacts(statePath, socketPath); err == nil {
+				cleaned = append(cleaned, entry.Name())
+			}
+		}
+	}
+
+	return cleaned, nil
+}
+
 // ShutdownIdle stops servers whose state indicates they exceeded idle timeout.
 func (l *Lifecycle) ShutdownIdle(ctx context.Context) error {
 	if l == nil {

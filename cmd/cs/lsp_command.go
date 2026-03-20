@@ -39,8 +39,15 @@ var lspRestartCmd = &cobra.Command{
 	RunE:  runLSPRestart,
 }
 
+var lspCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Clean up orphaned LSP daemon artifacts",
+	Args:  cobra.NoArgs,
+	RunE:  runLSPCleanup,
+}
+
 func init() {
-	lspCmd.AddCommand(lspWarmupCmd, lspStatusCmd, lspRestartCmd)
+	lspCmd.AddCommand(lspWarmupCmd, lspStatusCmd, lspRestartCmd, lspCleanupCmd)
 }
 
 var runLSPCommand = executeLSPCommand
@@ -139,6 +146,33 @@ func runLSPRestart(cmd *cobra.Command, args []string) error {
 	if !result.Supported {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No supported LSP language detected")
 		return err
+	}
+
+	return nil
+}
+
+func runLSPCleanup(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+
+	l := lsp.NewLifecycle(lsp.NewRegistry(), lsp.WithIdleTimeout(0)) // timeout not needed for cleanup
+
+	cleaned, err := l.Cleanup(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(cleaned) == 0 {
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "No orphaned LSP artifacts found")
+		return err
+	}
+
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Cleaned up artifacts for %d orphaned daemons:\n", len(cleaned))
+	if err != nil {
+		return err
+	}
+
+	for _, c := range cleaned {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", c)
 	}
 
 	return nil
