@@ -36,7 +36,7 @@ const (
 	defaultDBType            = "milvus"
 	defaultDBAddress         = "localhost:19530"
 	defaultOllamaHost        = "http://127.0.0.1:11434"
-	defaultEmbeddingModel    = "nomic-embed-text"
+	defaultEmbeddingModel    = "bge-m3"
 )
 
 const (

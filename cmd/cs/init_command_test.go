@@ -21,7 +21,7 @@ func TestInit_CreatesConfigAndGitignore(t *testing.T) {
 	if !strings.Contains(configContent, "[embedding]") {
 		t.Fatalf("config missing [embedding] section:\n%s", configContent)
 	}
-	if !strings.Contains(configContent, `model = "nomic-embed-text"`) {
+	if !strings.Contains(configContent, `model = "bge-m3"`) {
 		t.Fatalf("config missing default embedding model:\n%s", configContent)
 	}
 
@@ -224,4 +224,3 @@ func TestInit_OutputMessages(t *testing.T) {
 		}
 	})
 }
-

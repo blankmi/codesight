@@ -36,7 +36,7 @@
 | `CODESIGHT_DB_ADDRESS` | Milvus address | `localhost:19530` | observed |
 | `CODESIGHT_DB_TOKEN` | Milvus token | empty | observed |
 | `CODESIGHT_OLLAMA_HOST` | Ollama endpoint | `http://127.0.0.1:11434` | observed |
-| `CODESIGHT_EMBEDDING_MODEL` | embedding model name | `nomic-embed-text` | observed |
+| `CODESIGHT_EMBEDDING_MODEL` | embedding model name | `bge-m3` | observed |
 | `CODESIGHT_OLLAMA_MAX_INPUT_CHARS` | max embedding input characters | adaptive/default behavior | observed |
 | `CODESIGHT_STATE_DIR` | LSP state root | `${HOME}/.codesight` | observed (`pkg/lsp/lifecycle.go`) |
 | `CODESIGHT_GRADLE_JAVA_HOME` | optional Gradle JDK override for jdtls | unset | observed (`cmd/cs/main.go`) |

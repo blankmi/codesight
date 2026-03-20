@@ -28,7 +28,7 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 		"db.token":                  {Value: "", Source: "default"},
 		"db.type":                   {Value: "milvus", Source: "default"},
 		"embedding.max_input_chars": {Value: "0", Source: "default"},
-		"embedding.model":           {Value: "nomic-embed-text", Source: "default"},
+		"embedding.model":           {Value: "bge-m3", Source: "default"},
 		"embedding.ollama_host":     {Value: "http://127.0.0.1:11434", Source: "default"},
 		"index.warm_lsp":            {Value: "false", Source: "default"},
 		"lsp.daemon.idle_timeout":   {Value: "10m", Source: "default"},

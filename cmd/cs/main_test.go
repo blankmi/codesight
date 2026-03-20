@@ -503,8 +503,8 @@ func TestConfigIntegration_DefaultsUnchanged(t *testing.T) {
 		if cfg.Embedding.OllamaHost != "http://127.0.0.1:11434" {
 			t.Fatalf("Embedding.OllamaHost = %q, want %q", cfg.Embedding.OllamaHost, "http://127.0.0.1:11434")
 		}
-		if cfg.Embedding.Model != "nomic-embed-text" {
-			t.Fatalf("Embedding.Model = %q, want %q", cfg.Embedding.Model, "nomic-embed-text")
+		if cfg.Embedding.Model != "bge-m3" {
+			t.Fatalf("Embedding.Model = %q, want %q", cfg.Embedding.Model, "bge-m3")
 		}
 		if cfg.Embedding.MaxInputChars != 0 {
 			t.Fatalf("Embedding.MaxInputChars = %d, want 0", cfg.Embedding.MaxInputChars)
