@@ -14,15 +14,16 @@ func TestStateReadWriteRoundTripWithSocketPath(t *testing.T) {
 	socketPath := filepath.Join(stateDir, stateKey+lifecycleSocketFileExtension)
 
 	original := lifecycleState{
-		WorkspaceRoot:    "/repo",
-		Language:         "go",
-		StateKey:         stateKey,
-		SocketPath:       socketPath,
-		PID:              1234,
-		Binary:           "gopls",
-		Args:             []string{"serve"},
-		StartedUnixNano:  100,
-		LastUsedUnixNano: 200,
+		WorkspaceRoot:        "/repo",
+		Language:             "go",
+		StateKey:             stateKey,
+		SocketPath:           socketPath,
+		PID:                  1234,
+		Binary:               "gopls",
+		Args:                 []string{"serve"},
+		DaemonProcessStartID: "123456789",
+		StartedUnixNano:      100,
+		LastUsedUnixNano:     200,
 		JavaGradleBuildBaseline: &JavaGradleBuildBaseline{
 			Fingerprint: "baseline-fingerprint",
 			Files: []JavaGradleBuildFile{
@@ -54,6 +55,9 @@ func TestStateReadWriteRoundTripWithSocketPath(t *testing.T) {
 	}
 	if loaded.PID != original.PID {
 		t.Fatalf("loaded pid = %d, want %d", loaded.PID, original.PID)
+	}
+	if loaded.DaemonProcessStartID != original.DaemonProcessStartID {
+		t.Fatalf("loaded daemon process start ID = %q, want %q", loaded.DaemonProcessStartID, original.DaemonProcessStartID)
 	}
 	if loaded.JavaGradleBuildBaseline == nil {
 		t.Fatal("loaded java gradle baseline = nil, want non-nil baseline")
@@ -87,6 +91,9 @@ func TestStateReadLegacyPayloadWithoutSocketPath(t *testing.T) {
 	}
 	if loaded.SocketPath != wantSocketPath {
 		t.Fatalf("loaded socket path = %q, want %q", loaded.SocketPath, wantSocketPath)
+	}
+	if loaded.DaemonProcessStartID != "" {
+		t.Fatalf("loaded daemon process start ID = %q, want empty for legacy payload", loaded.DaemonProcessStartID)
 	}
 }
 

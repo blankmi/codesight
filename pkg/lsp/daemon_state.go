@@ -37,6 +37,7 @@ type lifecycleState struct {
 	PID                     int                      `json:"pid"`
 	Binary                  string                   `json:"binary"`
 	Args                    []string                 `json:"args"`
+	DaemonProcessStartID    string                   `json:"daemon_process_start_id,omitempty"`
 	StartedUnixNano         int64                    `json:"started_unix_nano"`
 	LastUsedUnixNano        int64                    `json:"last_used_unix_nano"`
 	JavaGradleBuildBaseline *JavaGradleBuildBaseline `json:"java_gradle_build_baseline,omitempty"`
@@ -53,6 +54,7 @@ func readStateFile(path string) (lifecycleState, error) {
 	}
 	state.StateKey = normalizeStateKey(path, state.StateKey)
 	state.SocketPath = normalizeSocketPath(path, state.StateKey)
+	state.DaemonProcessStartID = strings.TrimSpace(state.DaemonProcessStartID)
 	if state.JavaGradleBuildBaseline != nil {
 		normalized := normalizeJavaGradleBuildBaseline(*state.JavaGradleBuildBaseline)
 		state.JavaGradleBuildBaseline = &normalized
@@ -63,6 +65,7 @@ func readStateFile(path string) (lifecycleState, error) {
 func writeStateFile(path string, state lifecycleState) error {
 	state.StateKey = normalizeStateKey(path, state.StateKey)
 	state.SocketPath = normalizeSocketPath(path, state.StateKey)
+	state.DaemonProcessStartID = strings.TrimSpace(state.DaemonProcessStartID)
 	if state.JavaGradleBuildBaseline != nil {
 		normalized := normalizeJavaGradleBuildBaseline(*state.JavaGradleBuildBaseline)
 		state.JavaGradleBuildBaseline = &normalized

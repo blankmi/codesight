@@ -78,19 +78,19 @@ func runDaemonFromEnv() error {
 	return nil
 }
 
-func launchDaemonProcess(ctx context.Context, config daemonProcessConfig) (int, error) {
+func launchDaemonProcess(ctx context.Context, config daemonProcessConfig) (int, string, error) {
 	if err := config.validate(); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	encoded, err := encodeDaemonProcessConfig(config)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		return 0, fmt.Errorf("resolve executable: %w", err)
+		return 0, "", fmt.Errorf("resolve executable: %w", err)
 	}
 
 	cmd := exec.Command(exe)
@@ -105,7 +105,13 @@ func launchDaemonProcess(ctx context.Context, config daemonProcessConfig) (int, 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("start daemon process: %w", err)
+		return 0, "", fmt.Errorf("start daemon process: %w", err)
+	}
+
+	startID, err := processStartID(cmd.Process.Pid)
+	if err != nil && !errors.Is(err, errProcessIdentityUnsupported) {
+		_ = killProcess(cmd.Process.Pid)
+		return 0, "", fmt.Errorf("capture daemon process identity: %w", err)
 	}
 
 	go func() {
@@ -114,10 +120,10 @@ func launchDaemonProcess(ctx context.Context, config daemonProcessConfig) (int, 
 
 	if err := waitForDaemonReady(ctx, config.SocketPath, cmd.Process.Pid); err != nil {
 		_ = killProcess(cmd.Process.Pid)
-		return 0, err
+		return 0, "", err
 	}
 
-	return cmd.Process.Pid, nil
+	return cmd.Process.Pid, startID, nil
 }
 
 func daemonSocketHealthy(ctx context.Context, socketPath string) error {
