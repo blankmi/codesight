@@ -1,4 +1,4 @@
 interface:
   display_name: "Codesight (cs)"
-  short_description: "Semantic code search (network-backed)"
-  default_prompt: "Use $cs with network-enabled execution to index this repository and find the best code locations for my task."
+  short_description: "Repo discovery, extraction, and tracing"
+  default_prompt: "Use $cs to search, extract, or trace the relevant code for this task."

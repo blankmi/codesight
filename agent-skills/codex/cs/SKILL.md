@@ -1,19 +1,20 @@
 ---
 name: cs
-description: Use the CodeSight `cs` CLI for unified code intelligence: semantic discovery (`search`), symbol extraction (`extract`), and LSP navigation (`refs`, `callers`, `implements`). Trigger when tasks need fast repo discovery without broad file reads, deterministic symbol extraction, or cross-file symbol tracing.
+description: Use the CodeSight `cs` CLI for semantic discovery (`search`), semantic index lifecycle (`index`, `status`, `clear`), tree-sitter symbol extraction (`extract`), LSP navigation (`refs`, `callers`, `implements`), project config (`init`, `config`), and LSP daemon operations (`lsp`). Trigger when tasks need conceptual repo discovery, targeted symbol reads, cross-file symbol tracing, or CodeSight config/runtime diagnosis.
 ---
 
-# Cs
+# CodeSight (`cs`)
 
-## Overview
+Use `cs` by intent instead of defaulting to broad file reads:
+- Exact text, identifiers, file names, and lexical patterns -> Grep
+- Conceptual discovery -> `cs search`
+- Semantic index lifecycle -> `cs status`, `cs index`, `cs clear`
+- Symbol extraction -> `cs extract`
+- Cross-file symbol navigation -> `cs refs`, `cs callers`, `cs implements`
+- Project setup and config inspection -> `cs init`, `cs config`
+- LSP daemon maintenance -> `cs lsp warmup`, `cs lsp status`, `cs lsp restart`, `cs lsp cleanup`
 
-Use `cs` to route by intent instead of defaulting to broad file reads:
-- lexical lookup -> Grep
-- conceptual discovery -> `cs search`
-- symbol extraction -> `cs extract`
-- references/call hierarchy/implementations -> `cs refs` / `cs callers` / `cs implements`
-
-In sandboxed Codex sessions, only commands that talk to Milvus/Ollama (`index/search/status/clear`) usually require network escalation.
+`cs search` is the discovery command. `cs index`, `cs status`, and `cs clear` manage the semantic index that `cs search` depends on.
 
 ## Workflow
 
@@ -28,11 +29,15 @@ In sandboxed Codex sessions, only commands that talk to Milvus/Ollama (`index/se
 - "Where is symbol Y referenced?": use `cs refs <symbol>`.
 - "Who calls symbol Y?": use `cs callers <symbol>`.
 - "Who implements type/interface Y?": use `cs implements <symbol>`.
+- "Set up CodeSight for this repo": use `cs init [path]`.
+- "Show me the effective CodeSight config": use `cs config [path]`.
+- "Warm or inspect the LSP daemon": use `cs lsp ...`.
 
-3. For conceptual discovery, check index state first.
+3. For conceptual discovery, manage index lifecycle first.
 - Run `cs status <path>`.
 - If not indexed or stale, run `cs index <path> --branch <branch> --commit <sha>`.
 - Use `--force` only when re-index is explicitly needed.
+- Treat `cs clear <path>` as destructive. Only use it when the user explicitly wants the semantic index removed or reset.
 
 4. Search with a broad query, then narrow.
 - Start with `cs search "<natural language query>" --path <path>`.
@@ -47,41 +52,50 @@ In sandboxed Codex sessions, only commands that talk to Milvus/Ollama (`index/se
 - Open the top result files and confirm behavior.
 - Return concise references with file and line ranges.
 
-7. Respect LSP runtime constraints for navigation commands.
-- `cs refs`, `cs callers`, and `cs implements` run language servers as child processes over stdio.
-- No remote/TCP LSP mode is supported.
+7. Respect runtime constraints.
+- `cs search`, `cs index`, `cs status`, and `cs clear` require Milvus and Ollama.
+- `cs extract`, `cs init`, and `cs config` are local filesystem operations.
+- `cs refs`, `cs callers`, `cs implements`, and `cs lsp` run language servers as child processes over stdio.
+- `cs refs` may fall back to grep when LSP is unavailable.
+- `cs callers` and `cs implements` do not fall back to grep.
+- No remote or TCP LSP mode is supported.
 - `${CODESIGHT_STATE_DIR:-~/.codesight}` persistence is recommended for warm starts, not required for correctness.
-- `host.docker.internal` is for Milvus/Ollama endpoints, not LSP transport.
 
 ## Codex Execution Rule
 
-When invoking `cs index`, `cs search`, `cs status`, or `cs clear` in sandboxed Codex sessions, set:
-- `sandbox_permissions: "require_escalated"`
-- `justification`: ask to allow network access for CodeSight DB queries
+In sandboxed Codex sessions:
+- `cs search`, `cs index`, `cs status`, and `cs clear` usually need network access to reach Milvus or Ollama.
+- `cs extract`, `cs init`, `cs config`, `cs refs`, `cs callers`, `cs implements`, and `cs lsp` usually stay inside the filesystem and local process sandbox, assuming required binaries are installed.
+- If a semantic command fails because of sandboxed network access, rerun it with:
+  - `sandbox_permissions: "require_escalated"`
+  - `justification`: ask to allow CodeSight to reach the local Milvus or Ollama service
 
-After first approval, request persistent prefix rules to avoid repeated prompts:
-- `["cs", "search"]`
-- `["cs", "status"]`
-- Optional: `["cs", "index"]`, `["cs", "clear"]`
+After first approval, request a persistent shell prefix rule for `["cs"]` if the user wants CodeSight commands to run without repeated shell-approval prompts.
 
 ## Command Patterns
 
-- Check status: `cs status <path>`
-- Build or refresh index: `cs index <path> --branch <branch> --commit <sha>`
-- Semantic search: `cs search "<query>" --path <path> --limit 10`
-- Narrow by language: `cs search "<query>" --path <path> --ext .go,.ts`
+- Discovery: `cs search "<query>" [--path <dir>] [--ext .go,.ts] [--limit <n>]`
+- Index status: `cs status [path]`
+- Build or refresh index: `cs index [path] [--branch <name>] [--commit <sha>] [--force]`
+- Clear index: `cs clear [path]`
 - Symbol extraction: `cs extract -f <file-or-dir> -s <symbol> [--format raw|json]`
 - References: `cs refs <symbol> [--path <dir>] [--kind function|method|class|interface|type|constant]`
 - Incoming callers: `cs callers <symbol> [--path <dir>] [--depth <n>]`
 - Implementations: `cs implements <symbol> [--path <dir>]`
-- Clear index: `cs clear <path>`
+- Initialize repo config: `cs init [path]`
+- Show effective config: `cs config [path]`
+- LSP warmup: `cs lsp warmup [path]`
+- LSP status: `cs lsp status [path]`
+- LSP restart: `cs lsp restart [path]`
+- LSP cleanup: `cs lsp cleanup`
 
 ## Guardrails
 
 - Always confirm `cs` results by reading source before final claims.
 - Keep Grep as the first choice for exact text lookups.
-- In this repository, use `cs extract` as the default symbol extraction path.
+- Use `cs extract` instead of broad file reads when the task only needs one symbol.
 - Re-index when repository HEAD changes significantly or when stale status is reported.
 - If `cs search` returns no useful hits, retry with alternate wording before falling back to manual tree-wide scans.
-- `cs refs` may fallback to grep with a precision note when LSP is unavailable.
-- `cs callers` and `cs implements` do not fallback to grep; they fail fast with install guidance when LSP binaries are missing.
+- Treat `cs clear` as destructive.
+- `cs refs` may fall back to grep with a precision note when LSP is unavailable.
+- `cs callers` and `cs implements` fail fast with install guidance when LSP binaries are missing.

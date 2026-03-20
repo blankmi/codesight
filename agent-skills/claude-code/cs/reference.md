@@ -2,84 +2,150 @@
 
 ## Commands
 
-### `cs index <path>`
-
-Index a repository for semantic search.
-
-```bash
-# Index with auto-detected git info
-cs index /path/to/repo
-
-# Specify branch and commit
-cs index /path/to/repo --branch main --commit abc123
-
-# Force re-index even if up to date
-cs index /path/to/repo --force
-```
-
 ### `cs search <query>`
 
-Search indexed code with natural language.
+Semantic discovery over indexed code.
 
 ```bash
-# Basic search
+# Basic discovery
 cs search "authentication middleware"
 
 # Search with path context
 cs search "database connection" --path /path/to/repo
 
 # Filter by file extensions
-cs search "error handling" --ext .go,.ts
+cs search "error handling" --path /path/to/repo --ext .go,.ts
 
 # Limit number of results
-cs search "retry logic" --limit 5
-
-# Combine options
-cs search "JWT validation" --path /app --ext .js,.ts --limit 10
+cs search "retry logic" --path /path/to/repo --limit 5
 ```
 
-### `cs status <path>`
+### `cs status [path]`
 
-Check if a repository is indexed and up to date.
+Check whether the semantic index exists and whether it is stale.
 
 ```bash
 cs status /path/to/repo
 ```
 
-### `cs clear <path>`
+### `cs index <path>`
 
-Remove the index for a repository.
+Build or refresh the semantic index used by `cs search`.
+
+```bash
+# Index with explicit metadata
+cs index /path/to/repo --branch main --commit abc123
+
+# Index current repo
+cs index /path/to/repo
+
+# Force re-index even if up to date
+cs index /path/to/repo --force
+```
+
+### `cs clear [path]`
+
+Remove the semantic index for a repository. This is destructive.
 
 ```bash
 cs clear /path/to/repo
 ```
 
+### `cs extract -f <file-or-dir> -s <symbol>`
+
+Extract a named symbol using tree-sitter AST parsing.
+
+```bash
+cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind
+cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind --format json
+```
+
+### `cs refs <symbol>`
+
+Find references for a symbol. Falls back to grep if LSP is unavailable.
+
+```bash
+cs refs NormalizeRefKind
+cs refs NormalizeRefKind --path ./pkg/lsp
+cs refs NormalizeRefKind --kind function
+```
+
+### `cs callers <symbol>`
+
+Trace incoming callers for a symbol. Requires LSP.
+
+```bash
+cs callers runSearch
+cs callers runSearch --path ./cmd/cs --depth 2
+```
+
+### `cs implements <symbol>`
+
+Find implementations of a type or interface. Requires LSP.
+
+```bash
+cs implements Store
+cs implements Store --path ./pkg
+```
+
+### `cs init [path]`
+
+Create `.codesight/config.toml` and `.codesight/.gitignore` for a repo.
+
+```bash
+cs init /path/to/repo
+```
+
+### `cs config [path]`
+
+Show effective CodeSight configuration values and their provenance.
+
+```bash
+cs config /path/to/repo
+```
+
+### `cs lsp ...`
+
+Manage warmed LSP daemons directly.
+
+```bash
+cs lsp warmup /path/to/repo
+cs lsp status /path/to/repo
+cs lsp restart /path/to/repo
+cs lsp cleanup
+```
+
 ## Supported Languages
 
-**AST-aware chunking** (better accuracy):
+**AST-aware chunking**:
 - Go, TypeScript, JavaScript, Python, Java, Rust, C, C++
 
-**Line-based chunking** (all other languages):
-- Uses overlapping line windows for context
+**Symbol extraction**:
+- Go, TypeScript, JavaScript, Python, Java, Rust, C++, XML, HTML
+
+**LSP navigation**:
+- Go, Python, Java, TypeScript/JavaScript, Rust, C/C++
 
 ## Examples
 
 ```bash
-# Index current project
-cs index .
-
 # Search for authentication logic
-cs search "JWT token validation and refresh"
+cs status .
+cs index . --branch main --commit "$(git rev-parse HEAD)"
+cs search "JWT token validation and refresh" --path .
 
 # Find database migrations in Python files
-cs search "database schema migration" --ext .py
+cs search "database schema migration" --path . --ext .py
 
 # Look for error handling in Go code
-cs search "error wrapping and context" --ext .go --limit 20
+cs search "error wrapping and context" --path . --ext .go --limit 20
 
-# Check if re-indexing needed
-cs status .
+# Extract one symbol instead of reading the whole file
+cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind
 
-# Clear and re-index
-cs clear . && cs index . --force
+# Inspect effective config
+cs config .
+
+# Check daemon status for LSP-backed commands
+cs lsp status .
 ```
