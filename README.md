@@ -343,29 +343,23 @@ Agent tool selection should usually be driven by project instruction files. Skil
 
 ### Step 1: add project instructions
 
-Add the following to your project's instruction file:
+Different agents have different failure modes, so each template is tuned accordingly. Copy the matching template into the instruction file that your agent loads automatically:
 
-| Agent | Instruction file | Loaded automatically |
-|---|---|---|
-| Claude Code | `CLAUDE.md` | Yes |
-| Gemini CLI | `GEMINI.md` | Yes |
-| Codex | `AGENTS.md` | Yes |
+| Agent | Instruction file | Template | Tuned for |
+|---|---|---|---|
+| Claude Code | `CLAUDE.md` | [TPL_CLAUDE.md](TPL_CLAUDE.md) | Tends to over-read for “confidence” and sometimes skips tools — template emphasizes focused extraction and tool routing |
+| Codex | `AGENTS.md` | [TPL_AGENTS.md](TPL_AGENTS.md) | Tends to overuse `read_file` and chain grep-read loops — template enforces strict read discipline and tool ordering |
+| Gemini CLI | `GEMINI.md` | [TPL_GEMINI.md](TPL_GEMINI.md) | Tends to overuse semantic search for simple lookups — template focuses on preventing `cs search` misuse |
 
-```markdown
-# Tool Selection
+All three templates share the same routing logic:
 
-- **Search** -> `Grep`. Always start here for text, identifiers, patterns, class names, file locations.
-- **Understand** -> `cs search "<query>" --path .` via Bash. Only for conceptual questions when you don't know which files matter.
-- **References** -> `cs refs <symbol> --path <dir>` via Bash. Find all references to a symbol across files.
-- **Call hierarchy** -> `cs callers <symbol> --path <dir>` via Bash. Trace who calls a function.
-- **Implementations** -> `cs implements <symbol> --path <dir>` via Bash. Find implementations of an interface or type.
-- **Find files** -> `Glob`.
+| Intent | Tool |
+|---|---|
+| Exact lookup (symbol, string, path) | `grep` / `find` |
+| Conceptual discovery (unknown files) | `cs search “<query>” --path .` |
+| Single symbol from a large file | `cs extract -f <file> -s <symbol>` |
+| Cross-file references | `cs refs`, `cs callers`, `cs implements` |
 
-When reading one specific symbol from a large file (>200 lines), prefer `cs extract -f <file> -s <symbol>` over a full-file read.
-
-Do NOT use `cs search` to locate a file or a known class or method.
-Do NOT read 5+ files to understand a feature when `cs search` can rank the likely files first.
-```
 
 > [!IMPORTANT]
 > Keep context-dependent `cs` workflows project-scoped. `cs search`, `cs index`, `cs status`, `cs clear`, `cs refs`, `cs callers`, `cs implements`, and `cs lsp` depend on workspace-specific context such as project path, index state, and installed language servers, so those instructions belong in project-level files. Tree-sitter-based symbol extraction such as `cs extract` can be enabled in global instructions, but only if the global rule is explicit about that narrower scope and does not route agents into the project-context-dependent commands above.
