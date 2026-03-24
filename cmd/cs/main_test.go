@@ -258,7 +258,7 @@ func TestRootCommandWithoutArgsShowsHelp(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
-	if !strings.Contains(stdout, "Usage:\n  cs [command]") {
+	if !strings.Contains(stdout, "cs [command]") {
 		t.Fatalf("stdout missing usage: %q", stdout)
 	}
 	if !strings.Contains(stdout, "Available Commands:") {

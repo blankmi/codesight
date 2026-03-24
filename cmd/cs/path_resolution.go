@@ -17,7 +17,7 @@ func commandTargetPath(cmd *cobra.Command, args []string) (string, error) {
 	}
 
 	switch cmd {
-	case rootCmd, queryCmd, searchCmd, refsCmd, callersCmd, implementsCmd:
+	case queryCmd, searchCmd, refsCmd, callersCmd, implementsCmd:
 		return cmd.Flags().GetString("path")
 	case indexCmd, statusCmd, clearCmd, configCmd:
 		if len(args) > 0 {
@@ -30,6 +30,10 @@ func commandTargetPath(cmd *cobra.Command, args []string) (string, error) {
 		}
 		return "", nil
 	default:
+		// Root command with persistent --path flag.
+		if p, err := cmd.Flags().GetString("path"); err == nil && p != "" {
+			return p, nil
+		}
 		return "", nil
 	}
 }

@@ -161,19 +161,33 @@ var (
 	runCallersCommand    = executeCallersCommand
 	runImplementsCommand = executeImplementsCommand
 	runIndexWarmup       = executeIndexWarmup
+
+	detectIndexWarmupLanguage = func(workspaceRoot string, registry *lsp.Registry) (string, error) {
+		return detectRefsLanguage(workspaceRoot, registry)
+	}
+	runWorkspaceLSPWarmup = func(ctx context.Context, workspaceRoot, language string) error {
+		return executeLSPWarmup(ctx, workspaceRoot, language, runtimeConfig)
+	}
+
+	runtimeConfig = configpkg.Defaults()
+
+	errNoSupportedRefsLanguage = errors.New("no supported LSP language detected")
 )
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable debug logging")
-	rootCmd.PersistentFlags().StringVar(&flagPath, "path", "", "scope to subdirectory or file")
-	rootCmd.PersistentFlags().IntVar(&flagQueryDepth, "depth", 1, "caller/dependency expansion depth")
-	rootCmd.PersistentFlags().StringVar(&flagQueryBudget, "budget", "auto", "output size: auto|small|medium|large")
-	rootCmd.PersistentFlags().StringVar(&flagQueryMode, "mode", "auto", "override router: auto|symbol|text|ast|path")
+
+	// Root command flags for direct `cs <query>` usage.
+	rootCmd.Flags().StringVar(&flagPath, "path", "", "scope to subdirectory or file")
+	rootCmd.Flags().IntVar(&flagQueryDepth, "depth", 1, "caller/dependency expansion depth")
+	rootCmd.Flags().StringVar(&flagQueryBudget, "budget", "auto", "output size: auto|small|medium|large")
+	rootCmd.Flags().StringVar(&flagQueryMode, "mode", "auto", "override router: auto|symbol|text|ast|path")
 
 	indexCmd.Flags().BoolVar(&flagForce, "force", false, "re-index even if already indexed")
 	indexCmd.Flags().StringVar(&flagBranch, "branch", "", "branch name for metadata")
 	indexCmd.Flags().StringVar(&flagCommit, "commit", "", "commit SHA to record")
 
+	searchCmd.Flags().StringVar(&flagPath, "path", ".", "codebase path")
 	searchCmd.Flags().IntVar(&flagLimit, "limit", 10, "max results")
 	searchCmd.Flags().StringVar(&flagExt, "ext", "", "filter by file extensions (comma-separated, e.g. .go,.ts)")
 
@@ -187,7 +201,16 @@ func init() {
 		panic(err)
 	}
 
+	refsCmd.Flags().String("path", "", "project path")
 	refsCmd.Flags().String("kind", "", "reference kind filter (function|method|class|interface|type|constant)")
+	callersCmd.Flags().String("path", "", "project path")
+	callersCmd.Flags().Int("depth", 1, "call hierarchy depth")
+	implementsCmd.Flags().String("path", "", "project path")
+
+	queryCmd.Flags().String("path", "", "scope to subdirectory or file")
+	queryCmd.Flags().Int("depth", 1, "caller/dependency expansion depth")
+	queryCmd.Flags().String("budget", "auto", "output size: auto|small|medium|large")
+	queryCmd.Flags().String("mode", "auto", "override router: auto|symbol|text|ast|path")
 
 	rootCmd.AddCommand(queryCmd)
 	rootCmd.AddCommand(indexCmd)
