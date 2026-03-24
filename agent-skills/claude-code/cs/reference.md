@@ -2,6 +2,39 @@
 
 ## Commands
 
+### `cs <query>` (unified retrieval)
+
+Single-call retrieval front door. Routes internally to symbol lookup, path discovery, text search, or AST search. Returns ranked, budgeted Markdown with definition, references, callers, and implementations.
+
+```bash
+# Symbol lookup with references and callers
+cs Authenticate
+
+# Deeper caller expansion
+cs auth.Login --depth 2
+
+# Path discovery
+cs pkg/auth.go
+
+# Text / error search
+cs "connection refused"
+
+# More context
+cs Authenticate --budget large
+
+# Explicit subcommand with mode override
+cs query Authenticate --mode symbol
+
+# Scope to a subdirectory
+cs Authenticate --path ./pkg/auth
+```
+
+**Flags:**
+- `--path <dir>` — scope to subdirectory or file
+- `--depth <n>` — caller/dependency expansion depth (default 1)
+- `--budget auto|small|medium|large` — output size target (default auto)
+- `--mode auto|symbol|text|ast|path` — override query classification (default auto)
+
 ### `cs search <query>`
 
 Semantic discovery over indexed code.
@@ -129,6 +162,11 @@ cs lsp cleanup
 ## Examples
 
 ```bash
+# Unified retrieval — start here for any code investigation
+cs Authenticate
+cs Authenticate --depth 2 --budget large
+cs "connection refused"
+
 # Search for authentication logic
 cs status .
 cs index . --branch main --commit "$(git rev-parse HEAD)"
