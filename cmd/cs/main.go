@@ -191,6 +191,12 @@ func init() {
 	callersCmd.Flags().Int("depth", 1, "call hierarchy depth")
 	implementsCmd.Flags().String("path", "", "project path")
 
+	queryCmd.Flags().String("path", "", "scope to subdirectory or file")
+	queryCmd.Flags().Int("depth", 1, "caller/dependency expansion depth")
+	queryCmd.Flags().String("budget", "auto", "output size: auto|small|medium|large")
+	queryCmd.Flags().String("mode", "auto", "override router: auto|symbol|text|ast|path")
+
+	rootCmd.AddCommand(queryCmd)
 	rootCmd.AddCommand(indexCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(extractCmd)

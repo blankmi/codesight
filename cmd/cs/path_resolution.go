@@ -22,6 +22,8 @@ func commandTargetPath(cmd *cobra.Command, args []string) (string, error) {
 			return args[0], nil
 		}
 		return "", nil
+	case queryCmd:
+		return cmd.Flags().GetString("path")
 	case searchCmd, refsCmd, callersCmd, implementsCmd:
 		return cmd.Flags().GetString("path")
 	case lspWarmupCmd, lspStatusCmd, lspRestartCmd:

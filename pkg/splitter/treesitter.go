@@ -134,6 +134,11 @@ func extractLines(lines []string, start, end int) string {
 	return strings.Join(lines[start-1:end], "\n")
 }
 
+// GetLanguage returns the tree-sitter language for the given name, or nil if unsupported.
+func GetLanguage(lang string) *sitter.Language {
+	return getLanguage(lang)
+}
+
 func getLanguage(lang string) *sitter.Language {
 	switch strings.ToLower(lang) {
 	case "go":
