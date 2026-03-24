@@ -35,9 +35,34 @@ const (
 )
 
 func main() {
+	// When the first non-flag argument isn't a known subcommand,
+	// treat the invocation as `cs query <args...>` so that
+	// `cs Supplier` works like `cs query Supplier`.
+	if args := os.Args[1:]; len(args) > 0 {
+		first := args[0]
+		if first != "" && !strings.HasPrefix(first, "-") && !isSubcommand(rootCmd, first) {
+			os.Args = append([]string{os.Args[0], "query"}, args...)
+		}
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// isSubcommand reports whether name matches any registered subcommand
+// (including "help" and "completion" which Cobra adds automatically).
+func isSubcommand(root *cobra.Command, name string) bool {
+	// Cobra lazily adds "help" and "completion" — check them explicitly.
+	if name == "help" || name == "completion" {
+		return true
+	}
+	for _, c := range root.Commands() {
+		if c.Name() == name || c.HasAlias(name) {
+			return true
+		}
+	}
+	return false
 }
 
 var rootCmd = &cobra.Command{
