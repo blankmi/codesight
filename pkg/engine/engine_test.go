@@ -240,3 +240,39 @@ func TestRenderMarkdownNotFound(t *testing.T) {
 		t.Error("missing candidate")
 	}
 }
+
+func TestRenderMarkdownSlices(t *testing.T) {
+	result := &SymbolIntelligence{
+		Query:  "LongFunction",
+		Symbol: "LongFunction",
+		Status: "ok",
+		Mode:   "symbol",
+		Definition: &SymDefinition{
+			File:         "pkg/main.go",
+			Line:         1,
+			EndLine:      100,
+			Type:         "function",
+			Signature:    "func LongFunction() {",
+			ViewStrategy: "signature_plus_slices",
+			Language:     "go",
+			Slices: []CodeSlice{
+				{Label: "Header slice", StartLine: 1, EndLine: 5, Code: "func LongFunction() {\n\t// ..."},
+				{Label: "I/O site slice", StartLine: 50, EndLine: 55, Code: "\tdata, err := os.ReadFile(path)"},
+			},
+		},
+		Meta: SymMeta{
+			Mode:        "symbol",
+			SearchChain: []string{"symbol"},
+			Budget:      ComputeBudget("small", 1),
+		},
+	}
+
+	md := RenderMarkdown(result)
+
+	if !strings.Contains(md, "### Header slice") {
+		t.Error("missing Header slice")
+	}
+	if !strings.Contains(md, "### I/O site slice") {
+		t.Error("missing I/O site slice")
+	}
+}

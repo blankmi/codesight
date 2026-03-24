@@ -134,11 +134,25 @@ func findErrorAndIOSlices(root *sitter.Node, source []byte, startLine, endLine i
 		nodeType := node.Type()
 		content := node.Content(source)
 
-		isErrorPath := nodeType == "if_statement" &&
-			(strings.Contains(content, "err != nil") || strings.Contains(content, "err :="))
-		isTryCatch := nodeType == "try_statement" || nodeType == "catch_clause"
+		isErrorPath := (nodeType == "if_statement" &&
+			(strings.Contains(content, "err != nil") || strings.Contains(content, "err :="))) ||
+			nodeType == "try_statement" || nodeType == "catch_clause"
 
-		if isErrorPath || isTryCatch {
+		isIO := nodeType == "call_expression" &&
+			(strings.Contains(content, "Read") || strings.Contains(content, "Write") ||
+				strings.Contains(content, "Open") || strings.Contains(content, "Close") ||
+				strings.Contains(content, "Get") || strings.Contains(content, "Post") ||
+				strings.Contains(content, "Query") || strings.Contains(content, "Exec") ||
+				strings.Contains(content, "Send") || strings.Contains(content, "Recv"))
+
+		if isErrorPath || isIO {
+			label := "Error path slice"
+			reason := "error handling"
+			if isIO {
+				label = "I/O site slice"
+				reason = "external I/O"
+			}
+
 			sliceEnd := int(node.EndPoint().Row) + 1
 			if sliceEnd-nodeLine > salientSliceSize {
 				sliceEnd = nodeLine + salientSliceSize - 1
@@ -147,10 +161,10 @@ func findErrorAndIOSlices(root *sitter.Node, source []byte, startLine, endLine i
 				sliceEnd = endLine
 			}
 			slices = append(slices, CodeSlice{
-				Label:     "Error path slice",
+				Label:     label,
 				StartLine: nodeLine,
 				EndLine:   sliceEnd,
-				Reason:    "error handling",
+				Reason:    reason,
 				Code:      joinLines(lines, nodeLine-1, sliceEnd-1),
 			})
 		}
@@ -170,30 +184,57 @@ func findSalientSlicesByText(source []byte, startLine, endLine int) []CodeSlice 
 	var slices []CodeSlice
 
 	errorPatterns := []string{"if err", "catch", "except ", "rescue "}
+	ioPatterns := []string{"Read", "Write", "Open", "Close", "Get", "Post", "Query", "Exec", "Send", "Recv"}
 
 	for i := startLine - 1; i < endLine && i < len(lines); i++ {
 		if len(slices) >= salientSliceMax {
 			break
 		}
 		line := lines[i]
+
+		isError := false
 		for _, pattern := range errorPatterns {
 			if strings.Contains(line, pattern) {
-				sliceEnd := i + salientSliceSize
-				if sliceEnd >= len(lines) {
-					sliceEnd = len(lines) - 1
-				}
-				if sliceEnd >= endLine {
-					sliceEnd = endLine - 1
-				}
-				slices = append(slices, CodeSlice{
-					Label:     "Error path slice",
-					StartLine: i + 1,
-					EndLine:   sliceEnd + 1,
-					Reason:    "error handling",
-					Code:      joinLines(lines, i, sliceEnd),
-				})
+				isError = true
 				break
 			}
+		}
+
+		isIO := false
+		if !isError {
+			for _, pattern := range ioPatterns {
+				if strings.Contains(line, pattern) {
+					isIO = true
+					break
+				}
+			}
+		}
+
+		if isError || isIO {
+			label := "Error path slice"
+			reason := "error handling"
+			if isIO {
+				label = "I/O site slice"
+				reason = "external I/O"
+			}
+
+			sliceEnd := i + salientSliceSize
+			if sliceEnd >= len(lines) {
+				sliceEnd = len(lines) - 1
+			}
+			if sliceEnd >= endLine {
+				sliceEnd = endLine - 1
+			}
+			slices = append(slices, CodeSlice{
+				Label:     label,
+				StartLine: i + 1,
+				EndLine:   sliceEnd + 1,
+				Reason:    reason,
+				Code:      joinLines(lines, i, sliceEnd),
+			})
+
+			// Skip ahead.
+			i = sliceEnd
 		}
 	}
 

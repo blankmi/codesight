@@ -17,15 +17,13 @@ func commandTargetPath(cmd *cobra.Command, args []string) (string, error) {
 	}
 
 	switch cmd {
+	case rootCmd, queryCmd, searchCmd, refsCmd, callersCmd, implementsCmd:
+		return cmd.Flags().GetString("path")
 	case indexCmd, statusCmd, clearCmd, configCmd:
 		if len(args) > 0 {
 			return args[0], nil
 		}
 		return "", nil
-	case queryCmd:
-		return cmd.Flags().GetString("path")
-	case searchCmd, refsCmd, callersCmd, implementsCmd:
-		return cmd.Flags().GetString("path")
 	case lspWarmupCmd, lspStatusCmd, lspRestartCmd:
 		if len(args) > 0 {
 			return args[0], nil
