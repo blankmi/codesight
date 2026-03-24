@@ -335,19 +335,22 @@ func TestRefsKindFilterIncludeExclude(t *testing.T) {
 		t.Fatalf("included output mismatch\n got: %q\nwant: %q", includedOutput, wantIncluded)
 	}
 
-	_, err = engine.Find(context.Background(), RefsOptions{
+	// When kind filter excludes all LSP candidates, the engine degrades to
+	// grep fallback. The temp dir contains "Target" in its files, so grep
+	// should find matches and return successfully with a precision note.
+	excludedOutput, err := engine.Find(context.Background(), RefsOptions{
 		WorkspaceRoot: root,
 		Symbol:        "Target",
 		Kind:          "method",
 	})
-	if err == nil {
-		t.Fatal("expected not-found error for excluded kind, got nil")
+	if err != nil {
+		t.Fatalf("Find with excluded kind returned error (expected grep fallback): %v", err)
 	}
-	if !errors.Is(err, errSymbolNotFound) {
-		t.Fatalf("error = %v, want errSymbolNotFound", err)
+	if !strings.Contains(excludedOutput, "Target") {
+		t.Fatalf("grep fallback output should contain Target, got: %q", excludedOutput)
 	}
-	if !strings.Contains(err.Error(), `"Target"`) {
-		t.Fatalf("missing symbol value in error: %q", err.Error())
+	if !strings.Contains(excludedOutput, "grep-based") {
+		t.Fatalf("grep fallback output should contain precision note, got: %q", excludedOutput)
 	}
 }
 
@@ -369,7 +372,7 @@ func TestRefsInvalidKindExactError(t *testing.T) {
 	}
 }
 
-func TestRefsMissingSymbolDoesNotFallback(t *testing.T) {
+func TestRefsMissingSymbolFallsBackToGrep(t *testing.T) {
 	root := t.TempDir()
 
 	client := &stubRefsClient{
@@ -392,13 +395,71 @@ func TestRefsMissingSymbolDoesNotFallback(t *testing.T) {
 		Symbol:        "MissingSymbol",
 	})
 	if err == nil {
-		t.Fatal("expected missing symbol error, got nil")
+		t.Fatal("expected not-found error from grep path, got nil")
 	}
-	if !errors.Is(err, errSymbolNotFound) {
-		t.Fatalf("error = %v, want errSymbolNotFound", err)
+	if !fallback.called {
+		t.Fatal("fallback should run when LSP responds with no matching symbol")
 	}
-	if fallback.called {
-		t.Fatal("fallback should not run when LSP responds with no matching symbol")
+	if errors.Is(err, errSymbolNotFound) {
+		t.Fatal("error should come from grep path, not LSP errSymbolNotFound")
+	}
+	if !strings.Contains(err.Error(), `"MissingSymbol"`) {
+		t.Fatalf("missing symbol value in error: %q", err.Error())
+	}
+}
+
+func TestRefsSymbolNotFoundFallsBackToGrepWithMatches(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "code.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"// grep-target appears here",
+		"func useIt() {}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "Unrelated",
+				Kind: SymbolKindFunction,
+				Location: Location{
+					URI:   fileURI(filepath.Join(root, "code.go")),
+					Range: Range{Start: Position{Line: 3}},
+				},
+			},
+		},
+	}
+
+	// Find (formatted output)
+	engine := NewRefsEngine(client, nil)
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "grep-target",
+		FallbackLSP:   "gopls",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	if !strings.Contains(output, "grep-target") {
+		t.Fatalf("expected grep results containing search term, got: %q", output)
+	}
+	if !strings.Contains(output, "grep-based") {
+		t.Fatalf("expected precision note in output, got: %q", output)
+	}
+
+	// FindReferencesRaw (structured output)
+	raw, source, err := engine.FindReferencesRaw(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "grep-target",
+	})
+	if err != nil {
+		t.Fatalf("FindReferencesRaw returned error: %v", err)
+	}
+	if source != "grep" {
+		t.Fatalf("source = %q, want grep", source)
+	}
+	if len(raw) == 0 {
+		t.Fatal("expected non-empty raw results from grep fallback")
 	}
 }
 

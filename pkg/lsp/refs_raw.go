@@ -39,7 +39,7 @@ func (e *RefsEngine) FindReferencesRaw(ctx context.Context, opts RefsOptions) ([
 		}
 
 		var unavailable *lspUnavailableError
-		if !errors.As(err, &unavailable) {
+		if !errors.As(err, &unavailable) && !errors.Is(err, errSymbolNotFound) {
 			return nil, "", err
 		}
 	}

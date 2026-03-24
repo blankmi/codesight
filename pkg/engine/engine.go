@@ -27,6 +27,11 @@ type ExtractProvider interface {
 	Extract(workspaceRoot, symbol string) (*SymDefinition, error)
 }
 
+// SearchProvider performs semantic search over indexed code.
+type SearchProvider interface {
+	Search(ctx context.Context, workspaceRoot, query string, limit int) ([]SymReference, error)
+}
+
 // Engine orchestrates a unified query across extract, refs, callers, and implements.
 type Engine struct {
 	WorkspaceRoot string
@@ -34,6 +39,7 @@ type Engine struct {
 	Callers       CallersProvider
 	Implements    ImplProvider
 	Extractor     ExtractProvider
+	Search        SearchProvider
 }
 
 // QueryOptions configures a single unified query.
@@ -246,38 +252,67 @@ func (e *Engine) queryPath(result *SymbolIntelligence) {
 }
 
 func (e *Engine) queryText(ctx context.Context, result *SymbolIntelligence, filterPath string, budget SymBudget) {
-	if e.Refs == nil {
-		return
+	maxItems := budget.ReferenceLines / 2
+	if maxItems < 1 {
+		maxItems = 1
 	}
 
-	// Use refs provider as a text search (grep fallback will handle it).
-	refs, source, err := e.Refs.FindRefs(ctx, e.WorkspaceRoot, filterPath, result.Query, "")
+	// Step 1: grep-based text search via refs provider.
+	if e.Refs != nil {
+		refs, source, err := e.Refs.FindRefs(ctx, e.WorkspaceRoot, filterPath, result.Query, "")
+		if err != nil {
+			result.Meta.Errors = append(result.Meta.Errors, "text search: "+err.Error())
+		} else if len(refs) > 0 {
+			result.Status = "ok"
+			result.Meta.RefsTotal = len(refs)
+			result.References = refs
+			if len(result.References) > maxItems {
+				result.References = result.References[:maxItems]
+			}
+			result.Meta.RefsShown = len(result.References)
+			result.Meta.RefsSource = source
+
+			for _, ref := range result.References {
+				result.Ambiguous = append(result.Ambiguous, SymCandidate{
+					Name:   result.Query,
+					Type:   "text match",
+					File:   ref.File,
+					Reason: "text search",
+				})
+			}
+			return
+		}
+	}
+
+	// Step 2: semantic search when grep found nothing.
+	if e.Search == nil {
+		return
+	}
+	result.Meta.SearchChain = append(result.Meta.SearchChain, "semantic")
+
+	limit := maxItems
+	if limit < 3 {
+		limit = 3
+	}
+
+	refs, err := e.Search.Search(ctx, e.WorkspaceRoot, result.Query, limit)
 	if err != nil {
-		result.Meta.Errors = append(result.Meta.Errors, "text search: "+err.Error())
+		result.Meta.Errors = append(result.Meta.Errors, "semantic search: "+err.Error())
 		return
 	}
-
 	if len(refs) > 0 {
 		result.Status = "ok"
-		maxItems := budget.ReferenceLines / 2
-		if maxItems < 1 {
-			maxItems = 1
-		}
 		result.Meta.RefsTotal = len(refs)
 		result.References = refs
-		if len(result.References) > maxItems {
-			result.References = result.References[:maxItems]
-		}
-		result.Meta.RefsShown = len(result.References)
-		result.Meta.RefsSource = source
+		result.Meta.RefsShown = len(refs)
+		result.Meta.RefsSource = "semantic"
 
-		// Build candidates from top references.
-		for _, ref := range result.References {
+		for _, ref := range refs {
 			result.Ambiguous = append(result.Ambiguous, SymCandidate{
 				Name:   result.Query,
-				Type:   "text match",
+				Type:   "semantic match",
 				File:   ref.File,
-				Reason: "text search",
+				Reason: "semantic search",
 			})
 		}
 	}

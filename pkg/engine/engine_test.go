@@ -46,6 +46,136 @@ func (m *mockImplProvider) FindImplementations(ctx context.Context, workspaceRoo
 	return m.impls, m.err
 }
 
+type mockSearchProvider struct {
+	refs   []SymReference
+	err    error
+	called bool
+}
+
+func (m *mockSearchProvider) Search(ctx context.Context, workspaceRoot, query string, limit int) ([]SymReference, error) {
+	m.called = true
+	return m.refs, m.err
+}
+
+func TestQueryTextFallsBackToSemanticSearch(t *testing.T) {
+	search := &mockSearchProvider{
+		refs: []SymReference{
+			{File: "pkg/auth.go", Line: 10, Snippet: "func Authenticate()", Score: 0.87, Reason: "semantic (score 0.87)"},
+		},
+	}
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Refs: &mockRefsProvider{
+			refs: nil, source: "grep",
+		},
+		Search: search,
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "How does authentication work?",
+		Mode:  "text",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "ok" {
+		t.Errorf("Status = %q, want ok", result.Status)
+	}
+	if result.Meta.RefsSource != "semantic" {
+		t.Errorf("RefsSource = %q, want semantic", result.Meta.RefsSource)
+	}
+	if !search.called {
+		t.Error("semantic search should have been called")
+	}
+	chain := strings.Join(result.Meta.SearchChain, " ")
+	if !strings.Contains(chain, "semantic") {
+		t.Errorf("SearchChain = %v, expected semantic", result.Meta.SearchChain)
+	}
+}
+
+func TestQueryTextSkipsSemanticWhenGrepSucceeds(t *testing.T) {
+	search := &mockSearchProvider{
+		refs: []SymReference{
+			{File: "should/not/appear.go", Line: 1},
+		},
+	}
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Refs: &mockRefsProvider{
+			refs:   []SymReference{{File: "pkg/foo.go", Line: 5, Snippet: "match"}},
+			source: "grep",
+		},
+		Search: search,
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "match",
+		Mode:  "text",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if search.called {
+		t.Error("semantic search should NOT be called when grep has results")
+	}
+	if result.Meta.RefsSource != "grep" {
+		t.Errorf("RefsSource = %q, want grep", result.Meta.RefsSource)
+	}
+}
+
+func TestQueryTextSemanticSearchErrorIsGraceful(t *testing.T) {
+	search := &mockSearchProvider{
+		err: errors.New("no index found"),
+	}
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Refs:          &mockRefsProvider{refs: nil, source: "grep"},
+		Search:        search,
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "missing query",
+		Mode:  "text",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, e := range result.Meta.Errors {
+		if strings.Contains(e, "semantic search") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected semantic search error in Meta.Errors, got %v", result.Meta.Errors)
+	}
+}
+
+func TestQueryTextNilSearchProvider(t *testing.T) {
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Refs:          &mockRefsProvider{refs: nil, source: "grep"},
+		Search:        nil,
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "something",
+		Mode:  "text",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should not panic and should not have semantic in chain.
+	chain := strings.Join(result.Meta.SearchChain, " ")
+	if strings.Contains(chain, "semantic") {
+		t.Errorf("SearchChain should not contain semantic when provider is nil: %v", result.Meta.SearchChain)
+	}
+}
+
 func TestQuerySymbolSuccess(t *testing.T) {
 	eng := &Engine{
 		WorkspaceRoot: "/workspace",

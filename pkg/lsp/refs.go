@@ -145,7 +145,7 @@ func (e *RefsEngine) Find(ctx context.Context, opts RefsOptions) (string, error)
 		}
 
 		var unavailable *lspUnavailableError
-		if !errors.As(err, &unavailable) {
+		if !errors.As(err, &unavailable) && !errors.Is(err, errSymbolNotFound) {
 			return "", err
 		}
 	}

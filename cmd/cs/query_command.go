@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
+	pkg "github.com/blankbytes/codesight/pkg"
 	"github.com/blankbytes/codesight/pkg/engine"
 	"github.com/blankbytes/codesight/pkg/lsp"
 	"github.com/spf13/cobra"
@@ -95,6 +97,24 @@ func executeQueryCommand(ctx context.Context, opts queryCommandOptions) (string,
 		implProvider = &engine.LSPImplAdapter{Engine: implEngine}
 	}
 
+	// Best-effort semantic search — skip if infrastructure unavailable.
+	var searchProvider engine.SearchProvider
+	cfg := currentConfig()
+	store, storeErr := newStore(cfg)
+	if storeErr == nil {
+		connectCtx, connectCancel := context.WithTimeout(ctx, 2*time.Second)
+		if connectErr := store.Connect(connectCtx); connectErr == nil {
+			searchProvider = &engine.SemanticSearchAdapter{
+				Searcher: &pkg.Searcher{
+					Store:    store,
+					Embedder: newEmbedder(cfg),
+				},
+			}
+			defer store.Close()
+		}
+		connectCancel()
+	}
+
 	depth := opts.Depth
 	if depth <= 0 {
 		depth = 1
@@ -106,6 +126,7 @@ func executeQueryCommand(ctx context.Context, opts queryCommandOptions) (string,
 		Callers:       callersProvider,
 		Implements:    implProvider,
 		Extractor:     &engine.TreeSitterExtractAdapter{},
+		Search:        searchProvider,
 	}
 
 	result, err := eng.Query(ctx, engine.QueryOptions{

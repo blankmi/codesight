@@ -86,7 +86,7 @@ type SymMeta struct {
 	SearchChain []string
 	Confidence  float64
 	Budget      SymBudget
-	RefsSource  string // lsp | grep
+	RefsSource  string // lsp | grep | semantic
 	RefsShown   int
 	RefsTotal   int
 	Errors      []string
