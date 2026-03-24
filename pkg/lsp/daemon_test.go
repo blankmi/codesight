@@ -154,13 +154,19 @@ func TestDaemonForwardToClientForwardsToActiveClient(t *testing.T) {
 	var serverBuffer bytes.Buffer
 
 	conn := &daemonTestConn{}
+	client := &daemonClient{
+		id:     1,
+		conn:   conn,
+		writer: bufio.NewWriter(&clientBuffer),
+	}
 	runtime := &daemonRuntime{
 		serverWriter: bufio.NewWriter(&serverBuffer),
-		active: &daemonClient{
-			conn:   conn,
-			writer: bufio.NewWriter(&clientBuffer),
-		},
+		clients:      map[uint64]*daemonClient{1: client},
+		pending:      make(map[int64]pendingRequest),
 	}
+
+	// Register a pending request so the response can be routed.
+	runtime.pending[7] = pendingRequest{client: client, clientID: json.RawMessage(`7`)}
 
 	payload := json.RawMessage(`{"jsonrpc":"2.0","id":7,"result":{"ok":true}}`)
 	runtime.forwardToClient(payload)
@@ -169,8 +175,19 @@ func TestDaemonForwardToClientForwardsToActiveClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read forwarded payload returned error: %v", err)
 	}
-	if string(gotPayload) != string(payload) {
-		t.Fatalf("forwarded payload = %s, want %s", gotPayload, payload)
+	// Compare JSON semantically since rewriteJSONID may reorder keys.
+	var gotMsg, wantMsg map[string]json.RawMessage
+	if err := json.Unmarshal(gotPayload, &gotMsg); err != nil {
+		t.Fatalf("unmarshal got payload returned error: %v", err)
+	}
+	if err := json.Unmarshal(payload, &wantMsg); err != nil {
+		t.Fatalf("unmarshal want payload returned error: %v", err)
+	}
+	if string(gotMsg["id"]) != string(wantMsg["id"]) {
+		t.Fatalf("forwarded id = %s, want %s", gotMsg["id"], wantMsg["id"])
+	}
+	if string(gotMsg["result"]) != string(wantMsg["result"]) {
+		t.Fatalf("forwarded result = %s, want %s", gotMsg["result"], wantMsg["result"])
 	}
 	if serverBuffer.Len() != 0 {
 		t.Fatalf("server buffer length = %d, want 0", serverBuffer.Len())
@@ -185,6 +202,8 @@ func TestDaemonForwardToClientRejectsServerRequestWithoutActiveClient(t *testing
 
 	runtime := &daemonRuntime{
 		serverWriter: bufio.NewWriter(&serverBuffer),
+		clients:      make(map[uint64]*daemonClient),
+		pending:      make(map[int64]pendingRequest),
 	}
 
 	request := RequestMessage{
@@ -228,7 +247,7 @@ func TestDaemonForwardToClientRejectsServerRequestWithoutActiveClient(t *testing
 	}
 }
 
-func TestDaemonRejectsBusyConcurrentClient(t *testing.T) {
+func TestDaemonAcceptsMultipleConcurrentClients(t *testing.T) {
 	lifecycle := newDaemonTestLifecycle(t, DefaultIdleTimeout, "")
 	workspace := t.TempDir()
 
@@ -258,18 +277,19 @@ func TestDaemonRejectsBusyConcurrentClient(t *testing.T) {
 		_ = secondConn.Close()
 	}()
 
-	if err := secondConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+	// Both connections should be accepted — verify second connection is not
+	// rejected with a busy message.
+	if err := secondConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 		t.Fatalf("SetReadDeadline returned error: %v", err)
 	}
 
 	buffer := make([]byte, 128)
 	n, readErr := secondConn.Read(buffer)
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		t.Fatalf("read busy response returned error: %v", readErr)
+	if readErr == nil && strings.Contains(string(buffer[:n]), daemonBusyMessage) {
+		t.Fatal("second client was rejected with busy message; daemon should accept multiple clients")
 	}
-	if !strings.Contains(string(buffer[:n]), daemonBusyMessage) {
-		t.Fatalf("busy response = %q, want substring %q", string(buffer[:n]), daemonBusyMessage)
-	}
+	// A timeout or EOF is expected since no one sent data — the point is the
+	// connection was not rejected.
 }
 
 func TestDaemonIdleTimeoutRemovesArtifacts(t *testing.T) {
@@ -574,6 +594,192 @@ func TestDaemonInitializeCaching(t *testing.T) {
 	}
 	if initializedCount != 1 {
 		t.Fatalf("fake server received %d initialized notifications, want 1", initializedCount)
+	}
+}
+
+func TestDaemonConcurrentClientsRequestIDRemapping(t *testing.T) {
+	lifecycle := newDaemonTestLifecycle(t, DefaultIdleTimeout, "")
+	workspace := t.TempDir()
+
+	lease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
+
+	// doInit performs the initialize/initialized handshake on a connection.
+	doInit := func(conn net.Conn, reqID int64) {
+		t.Helper()
+		writer := bufio.NewWriter(conn)
+		reader := bufio.NewReader(conn)
+
+		initReq := RequestMessage{JSONRPC: JSONRPCVersion, ID: reqID, Method: MethodInitialize, Params: InitializeParams{Capabilities: map[string]any{}}}
+		if err := writeJSONRPCMessage(writer, initReq); err != nil {
+			t.Fatalf("write initialize returned error: %v", err)
+		}
+		payload, err := readLSPMessage(reader)
+		if err != nil {
+			t.Fatalf("read initialize response returned error: %v", err)
+		}
+		var resp ResponseMessage
+		if err := json.Unmarshal(payload, &resp); err != nil {
+			t.Fatalf("unmarshal initialize response returned error: %v", err)
+		}
+		gotID, _ := parseResponseID(resp.ID)
+		if gotID != reqID {
+			t.Fatalf("initialize response id = %d, want %d", gotID, reqID)
+		}
+
+		initedNotif := NotificationMessage{JSONRPC: JSONRPCVersion, Method: MethodInitialized}
+		if err := writeJSONRPCMessage(writer, initedNotif); err != nil {
+			t.Fatalf("write initialized returned error: %v", err)
+		}
+	}
+
+	// Connect two clients simultaneously.
+	connA, err := dialDaemonSocket(context.Background(), lease.SocketPath)
+	if err != nil {
+		t.Fatalf("dial client A returned error: %v", err)
+	}
+	defer func() { _ = connA.Close() }()
+
+	time.Sleep(25 * time.Millisecond)
+
+	connB, err := dialDaemonSocket(context.Background(), lease.SocketPath)
+	if err != nil {
+		t.Fatalf("dial client B returned error: %v", err)
+	}
+	defer func() { _ = connB.Close() }()
+
+	// Initialize both clients.
+	doInit(connA, 1)
+	time.Sleep(25 * time.Millisecond)
+	doInit(connB, 1) // same request ID as client A — tests remapping
+
+	writerA := bufio.NewWriter(connA)
+	readerA := bufio.NewReader(connA)
+	writerB := bufio.NewWriter(connB)
+	readerB := bufio.NewReader(connB)
+
+	// Both clients send a request with the SAME id=1.
+	echoA := RequestMessage{JSONRPC: JSONRPCVersion, ID: 1, Method: "codesight/echo", Params: map[string]any{"from": "A"}}
+	if err := writeJSONRPCMessage(writerA, echoA); err != nil {
+		t.Fatalf("write echo A returned error: %v", err)
+	}
+
+	echoB := RequestMessage{JSONRPC: JSONRPCVersion, ID: 1, Method: "codesight/echo", Params: map[string]any{"from": "B"}}
+	if err := writeJSONRPCMessage(writerB, echoB); err != nil {
+		t.Fatalf("write echo B returned error: %v", err)
+	}
+
+	// Read responses — each client should get their own response with id=1.
+	payloadA, err := readLSPMessage(readerA)
+	if err != nil {
+		t.Fatalf("read echo A response returned error: %v", err)
+	}
+	var respA ResponseMessage
+	if err := json.Unmarshal(payloadA, &respA); err != nil {
+		t.Fatalf("unmarshal echo A response returned error: %v", err)
+	}
+	idA, _ := parseResponseID(respA.ID)
+	if idA != 1 {
+		t.Fatalf("echo A response id = %d, want 1", idA)
+	}
+	if !strings.Contains(string(respA.Result), "A") {
+		t.Fatalf("echo A response result = %s, want content from A", respA.Result)
+	}
+
+	payloadB, err := readLSPMessage(readerB)
+	if err != nil {
+		t.Fatalf("read echo B response returned error: %v", err)
+	}
+	var respB ResponseMessage
+	if err := json.Unmarshal(payloadB, &respB); err != nil {
+		t.Fatalf("unmarshal echo B response returned error: %v", err)
+	}
+	idB, _ := parseResponseID(respB.ID)
+	if idB != 1 {
+		t.Fatalf("echo B response id = %d, want 1", idB)
+	}
+	if !strings.Contains(string(respB.Result), "B") {
+		t.Fatalf("echo B response result = %s, want content from B", respB.Result)
+	}
+}
+
+func TestDaemonClientDisconnectDuringInFlight(t *testing.T) {
+	lifecycle := newDaemonTestLifecycle(t, DefaultIdleTimeout, "")
+	workspace := t.TempDir()
+
+	lease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
+
+	// Connect client A and initialize.
+	connA, err := dialDaemonSocket(context.Background(), lease.SocketPath)
+	if err != nil {
+		t.Fatalf("dial client A returned error: %v", err)
+	}
+	writerA := bufio.NewWriter(connA)
+	readerA := bufio.NewReader(connA)
+
+	initReq := RequestMessage{JSONRPC: JSONRPCVersion, ID: 1, Method: MethodInitialize, Params: InitializeParams{Capabilities: map[string]any{}}}
+	if err := writeJSONRPCMessage(writerA, initReq); err != nil {
+		t.Fatalf("write initialize returned error: %v", err)
+	}
+	if _, err := readLSPMessage(readerA); err != nil {
+		t.Fatalf("read initialize response returned error: %v", err)
+	}
+	initedNotif := NotificationMessage{JSONRPC: JSONRPCVersion, Method: MethodInitialized}
+	if err := writeJSONRPCMessage(writerA, initedNotif); err != nil {
+		t.Fatalf("write initialized returned error: %v", err)
+	}
+
+	// Close client A abruptly (simulates disconnect).
+	_ = connA.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect client B — should still work.
+	connB, err := dialDaemonSocket(context.Background(), lease.SocketPath)
+	if err != nil {
+		t.Fatalf("dial client B returned error: %v", err)
+	}
+	defer func() { _ = connB.Close() }()
+	writerB := bufio.NewWriter(connB)
+	readerB := bufio.NewReader(connB)
+
+	initReqB := RequestMessage{JSONRPC: JSONRPCVersion, ID: 1, Method: MethodInitialize, Params: InitializeParams{Capabilities: map[string]any{}}}
+	if err := writeJSONRPCMessage(writerB, initReqB); err != nil {
+		t.Fatalf("write initialize B returned error: %v", err)
+	}
+	if _, err := readLSPMessage(readerB); err != nil {
+		t.Fatalf("read initialize B response returned error: %v", err)
+	}
+	initedB := NotificationMessage{JSONRPC: JSONRPCVersion, Method: MethodInitialized}
+	if err := writeJSONRPCMessage(writerB, initedB); err != nil {
+		t.Fatalf("write initialized B returned error: %v", err)
+	}
+
+	echoReq := RequestMessage{JSONRPC: JSONRPCVersion, ID: 42, Method: "codesight/echo", Params: map[string]any{"test": true}}
+	if err := writeJSONRPCMessage(writerB, echoReq); err != nil {
+		t.Fatalf("write echo B returned error: %v", err)
+	}
+	echoPayload, err := readLSPMessage(readerB)
+	if err != nil {
+		t.Fatalf("read echo B response returned error: %v", err)
+	}
+	var echoResp ResponseMessage
+	if err := json.Unmarshal(echoPayload, &echoResp); err != nil {
+		t.Fatalf("unmarshal echo B response returned error: %v", err)
+	}
+	echoID, _ := parseResponseID(echoResp.ID)
+	if echoID != 42 {
+		t.Fatalf("echo B response id = %d, want 42", echoID)
 	}
 }
 

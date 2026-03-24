@@ -30,8 +30,17 @@ const (
 )
 
 type daemonClient struct {
+	id     uint64
 	conn   net.Conn
 	writer *bufio.Writer
+	mu     sync.Mutex // serializes writes to this client
+}
+
+// pendingRequest maps a daemon-assigned request ID back to the originating
+// client and the client's original request ID so responses can be routed.
+type pendingRequest struct {
+	client   *daemonClient
+	clientID json.RawMessage
 }
 
 type daemonRuntime struct {
@@ -48,8 +57,15 @@ type daemonRuntime struct {
 	activityUnixNano atomic.Int64
 	lastStatePersist atomic.Int64
 
-	activeMu sync.Mutex
-	active   *daemonClient
+	// Multi-client tracking.
+	clientsMu    sync.Mutex
+	clients      map[uint64]*daemonClient
+	nextClientID uint64
+
+	// Request ID remapping for multiplexing.
+	pendingMu sync.Mutex
+	pending   map[int64]pendingRequest // daemon-assigned ID → originating request
+	nextReqID atomic.Int64             // monotonic counter for daemon-global IDs
 
 	serverWriteMu sync.Mutex
 	stateWriteMu  sync.Mutex
@@ -253,6 +269,8 @@ func runDaemon(config daemonProcessConfig) error {
 		serverWriter:       bufio.NewWriter(serverStdin),
 		serverExitCh:       make(chan error, 1),
 		shutdownResponseCh: make(chan struct{}, 1),
+		clients:            make(map[uint64]*daemonClient),
+		pending:            make(map[int64]pendingRequest),
 	}
 	runtime.activityUnixNano.Store(time.Now().UnixNano())
 	runtime.touchActivity(time.Now())
@@ -269,7 +287,7 @@ func runDaemon(config daemonProcessConfig) error {
 
 func (d *daemonRuntime) acceptLoop() error {
 	for {
-		if !d.hasActiveClient() && d.idleExpired(time.Now()) {
+		if d.clientCount() == 0 && d.idleExpired(time.Now()) {
 			_ = d.shutdownLanguageServer()
 			return nil
 		}
@@ -298,20 +316,16 @@ func (d *daemonRuntime) acceptLoop() error {
 			return fmt.Errorf("accept daemon client: %w", err)
 		}
 
-		if !d.activateClient(conn) {
-			_ = rejectBusyConnection(conn)
-			continue
-		}
-
+		client := d.addClient(conn)
 		d.touchActivity(time.Now())
-		go d.handleClient(conn)
+		go d.handleClient(client)
 	}
 }
 
-func (d *daemonRuntime) handleClient(conn net.Conn) {
-	defer d.deactivateClient(conn)
+func (d *daemonRuntime) handleClient(client *daemonClient) {
+	defer d.removeClient(client)
 
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReader(client.conn)
 	for {
 		payload, err := readLSPMessage(reader)
 		if err != nil {
@@ -321,26 +335,36 @@ func (d *daemonRuntime) handleClient(conn net.Conn) {
 		d.touchActivity(time.Now())
 
 		method := extractMethod(payload)
+		reqID := extractRequestID(payload)
 		phase := d.initPhase.Load()
 
 		switch method {
 		case MethodInitialize:
 			if phase >= 1 {
 				// Subsequent client: reply from cache, rewrite response ID.
-				if err := d.replyInitializeFromCache(conn, payload); err != nil {
+				if err := d.replyInitializeFromCache(client, payload); err != nil {
 					return
 				}
 				continue
 			}
-			// First client: track request ID, fall through to forward.
-			if reqID := extractRequestID(payload); reqID != nil {
-				d.initReqID.Store(append([]byte(nil), reqID...))
+			// First client: remap ID and track for cache matching.
+			if reqID != nil {
+				remapped := d.remapRequest(client, reqID, payload)
+				// Store as []byte (not json.RawMessage) to match cacheInitializeResponse's type assertion.
+				if newID := extractRequestID(remapped); newID != nil {
+					d.initReqID.Store(append([]byte(nil), newID...))
+				}
+				if err := d.writeToServer(remapped); err != nil {
+					_ = killProcess(d.serverCmd.Process.Pid)
+					return
+				}
+				continue
 			}
 		case MethodInitialized:
 			if phase >= 2 {
 				continue // swallow duplicate
 			}
-			// First client: forward, then mark fully initialized.
+			// First client: forward notification (no ID), mark fully initialized.
 			if err := d.writeToServer(payload); err != nil {
 				_ = killProcess(d.serverCmd.Process.Pid)
 				return
@@ -349,6 +373,17 @@ func (d *daemonRuntime) handleClient(conn net.Conn) {
 			continue
 		}
 
+		// Requests (have both id and method): remap ID for multiplexing.
+		if reqID != nil && method != "" {
+			remapped := d.remapRequest(client, reqID, payload)
+			if err := d.writeToServer(remapped); err != nil {
+				_ = killProcess(d.serverCmd.Process.Pid)
+				return
+			}
+			continue
+		}
+
+		// Notifications and other messages: forward as-is.
 		if err := d.writeToServer(payload); err != nil {
 			_ = killProcess(d.serverCmd.Process.Pid)
 			return
@@ -475,6 +510,21 @@ func extractRequestID(payload []byte) json.RawMessage {
 	return envelope.ID
 }
 
+// rewriteJSONID replaces the "id" field in a JSON-RPC payload with newID.
+// Uses unmarshal/marshal to ensure correct JSON encoding.
+func rewriteJSONID(payload []byte, newID json.RawMessage) []byte {
+	var msg map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		return payload
+	}
+	msg["id"] = newID
+	result, err := json.Marshal(msg)
+	if err != nil {
+		return payload
+	}
+	return result
+}
+
 func (d *daemonRuntime) cacheInitializeResponse(payload []byte) {
 	if d.initPhase.Load() != 0 {
 		return
@@ -511,7 +561,7 @@ func (d *daemonRuntime) cacheInitializeResponse(payload []byte) {
 	d.initPhase.Store(1)
 }
 
-func (d *daemonRuntime) replyInitializeFromCache(conn net.Conn, requestPayload []byte) error {
+func (d *daemonRuntime) replyInitializeFromCache(client *daemonClient, requestPayload []byte) error {
 	clientReqID := extractRequestID(requestPayload)
 	if clientReqID == nil {
 		return fmt.Errorf("initialize request missing id")
@@ -536,35 +586,120 @@ func (d *daemonRuntime) replyInitializeFromCache(conn net.Conn, requestPayload [
 		return fmt.Errorf("marshal rewritten initialize response: %w", err)
 	}
 
-	d.activeMu.Lock()
-	defer d.activeMu.Unlock()
-	if d.active == nil || d.active.conn != conn {
-		return fmt.Errorf("client disconnected")
-	}
-	if err := writeLSPMessage(d.active.writer, rewritten); err != nil {
+	if err := d.writeToClient(client, rewritten); err != nil {
 		return fmt.Errorf("write cached initialize response: %w", err)
 	}
 	return nil
 }
 
+// remapRequest assigns a daemon-global request ID to a client request and
+// registers it in the pending map so the response can be routed back.
+// Returns a new payload with the remapped ID.
+func (d *daemonRuntime) remapRequest(client *daemonClient, originalID json.RawMessage, payload []byte) []byte {
+	daemonID := d.nextReqID.Add(1)
+
+	d.pendingMu.Lock()
+	d.pending[daemonID] = pendingRequest{
+		client:   client,
+		clientID: append(json.RawMessage(nil), originalID...),
+	}
+	d.pendingMu.Unlock()
+
+	// Rewrite the "id" field in the JSON payload.
+	newIDBytes, _ := json.Marshal(daemonID)
+	return rewriteJSONID(payload, newIDBytes)
+}
+
+// forwardToClient routes a language-server message to the appropriate client.
+// Responses (id, no method) are routed via the pending map.
+// Server-initiated requests (id + method) are routed to the first available client.
+// Notifications (method, no id) are broadcast to all clients.
 func (d *daemonRuntime) forwardToClient(payload []byte) {
-	shouldReject := false
-
-	d.activeMu.Lock()
-	if d.active == nil {
-		// Decide the no-client path under activeMu so reconnects cannot race the
-		// rejection, but perform the server write after unlocking to avoid
-		// nesting activeMu with serverWriteMu.
-		shouldReject = true
-	} else if err := writeLSPMessage(d.active.writer, payload); err != nil {
-		_ = d.active.conn.Close()
-		d.active = nil
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
 	}
-	d.activeMu.Unlock()
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return
+	}
 
-	if shouldReject {
+	hasID := len(envelope.ID) > 0
+	hasMethod := envelope.Method != ""
+
+	switch {
+	case hasID && !hasMethod:
+		// Response from language server — route to originating client.
+		d.routeResponse(payload, envelope.ID)
+	case hasID && hasMethod:
+		// Server-initiated request — route to first available client and
+		// reject if none are connected.
+		d.routeServerRequest(payload)
+	default:
+		// Server notification — broadcast to all connected clients.
+		d.broadcastToClients(payload)
+	}
+}
+
+func (d *daemonRuntime) routeResponse(payload []byte, responseID json.RawMessage) {
+	daemonID, err := parseResponseID(responseID)
+	if err != nil {
+		return
+	}
+
+	d.pendingMu.Lock()
+	pending, found := d.pending[daemonID]
+	if found {
+		delete(d.pending, daemonID)
+	}
+	d.pendingMu.Unlock()
+
+	if !found {
+		// Orphaned response (client disconnected) — discard.
+		return
+	}
+
+	// Rewrite the response ID back to the client's original ID.
+	rewritten := rewriteJSONID(payload, pending.clientID)
+	_ = d.writeToClient(pending.client, rewritten)
+}
+
+func (d *daemonRuntime) routeServerRequest(payload []byte) {
+	d.clientsMu.Lock()
+	var target *daemonClient
+	for _, c := range d.clients {
+		target = c
+		break
+	}
+	d.clientsMu.Unlock()
+
+	if target == nil {
 		d.rejectServerRequest(payload)
+		return
 	}
+	_ = d.writeToClient(target, payload)
+}
+
+func (d *daemonRuntime) broadcastToClients(payload []byte) {
+	d.clientsMu.Lock()
+	snapshot := make([]*daemonClient, 0, len(d.clients))
+	for _, c := range d.clients {
+		snapshot = append(snapshot, c)
+	}
+	d.clientsMu.Unlock()
+
+	for _, c := range snapshot {
+		_ = d.writeToClient(c, payload)
+	}
+}
+
+func (d *daemonRuntime) writeToClient(client *daemonClient, payload []byte) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if err := writeLSPMessage(client.writer, payload); err != nil {
+		_ = client.conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (d *daemonRuntime) rejectServerRequest(payload []byte) {
@@ -575,7 +710,6 @@ func (d *daemonRuntime) rejectServerRequest(payload []byte) {
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return
 	}
-	// A request must have both an ID and a Method.
 	if envelope.Method == "" || len(envelope.ID) == 0 {
 		return
 	}
@@ -591,38 +725,42 @@ func (d *daemonRuntime) rejectServerRequest(payload []byte) {
 	_ = d.writeToServerJSON(response)
 }
 
-func (d *daemonRuntime) activateClient(conn net.Conn) bool {
-	d.activeMu.Lock()
-	defer d.activeMu.Unlock()
+func (d *daemonRuntime) addClient(conn net.Conn) *daemonClient {
+	d.clientsMu.Lock()
+	defer d.clientsMu.Unlock()
 
-	if d.active != nil {
-		return false
-	}
-
-	d.active = &daemonClient{
+	d.nextClientID++
+	client := &daemonClient{
+		id:     d.nextClientID,
 		conn:   conn,
 		writer: bufio.NewWriter(conn),
 	}
-	return true
+	d.clients[client.id] = client
+	return client
 }
 
-func (d *daemonRuntime) deactivateClient(conn net.Conn) {
-	d.activeMu.Lock()
-	defer d.activeMu.Unlock()
+func (d *daemonRuntime) removeClient(client *daemonClient) {
+	d.clientsMu.Lock()
+	delete(d.clients, client.id)
+	d.clientsMu.Unlock()
 
-	if d.active != nil && d.active.conn == conn {
-		_ = d.active.conn.Close()
-		d.active = nil
-		return
+	_ = client.conn.Close()
+
+	// Purge pending requests for this client so orphaned responses are discarded.
+	d.pendingMu.Lock()
+	for id, p := range d.pending {
+		if p.client == client {
+			delete(d.pending, id)
+		}
 	}
-	_ = conn.Close()
+	d.pendingMu.Unlock()
 }
 
-func (d *daemonRuntime) hasActiveClient() bool {
-	d.activeMu.Lock()
-	active := d.active != nil
-	d.activeMu.Unlock()
-	return active
+func (d *daemonRuntime) clientCount() int {
+	d.clientsMu.Lock()
+	n := len(d.clients)
+	d.clientsMu.Unlock()
+	return n
 }
 
 func (d *daemonRuntime) idleExpired(now time.Time) bool {
@@ -656,12 +794,12 @@ func (d *daemonRuntime) touchActivity(now time.Time) {
 }
 
 func (d *daemonRuntime) cleanup() {
-	d.activeMu.Lock()
-	if d.active != nil {
-		_ = d.active.conn.Close()
-		d.active = nil
+	d.clientsMu.Lock()
+	for id, c := range d.clients {
+		_ = c.conn.Close()
+		delete(d.clients, id)
 	}
-	d.activeMu.Unlock()
+	d.clientsMu.Unlock()
 
 	if d.listener != nil {
 		_ = d.listener.Close()
@@ -765,20 +903,6 @@ func writeJSONRPCMessage(writer *bufio.Writer, message any) error {
 	}
 	if err := writeLSPMessage(writer, payload); err != nil {
 		return fmt.Errorf("write json-rpc message: %w", err)
-	}
-	return nil
-}
-
-func rejectBusyConnection(conn net.Conn) error {
-	defer func() {
-		_ = conn.Close()
-	}()
-
-	if err := conn.SetWriteDeadline(time.Now().Add(daemonInternalMessageDeadline)); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(conn, daemonBusyMessage+"\n"); err != nil {
-		return err
 	}
 	return nil
 }

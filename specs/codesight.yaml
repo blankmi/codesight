@@ -68,6 +68,15 @@ phases:
 notifications:
   type: none
 
+context_search:
+  enabled: true
+  db_type: milvus
+  db_address: "host.docker.internal:19530"
+  embedding_provider: ollama
+  embedding_model: bge-m3
+  ollama_host: "http://host.docker.internal:11434"
+  auto_reindex: false
+
 vcs:
   type: "gitlab"
   token_env: "GIT_TOKEN"

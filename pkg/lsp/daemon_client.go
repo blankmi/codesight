@@ -344,9 +344,6 @@ func (c *DaemonConnector) shouldRetry(err error, ctx context.Context) bool {
 	if strings.Contains(err.Error(), "LSP required but ") {
 		return false
 	}
-	if isDaemonBusyError(err) {
-		return false
-	}
 	return true
 }
 
