@@ -1,6 +1,6 @@
 # codesight (`cs`)
 
-Unified code intelligence CLI for large codebases. `cs` combines semantic discovery (`search`) with semantic index lifecycle management (`index`, `status`, `clear`), surgical symbol extraction (`extract`), LSP-powered navigation (`refs`, `callers`, `implements`), project configuration (`init`, `config`), and LSP daemon lifecycle tooling (`lsp`).
+Unified code intelligence CLI for large codebases. `cs` provides a single-call retrieval front door (`cs <query>`) that routes, ranks, and budgets code intelligence from symbol extraction, references, callers, and implementations — replacing multi-step agent retrieval. It also includes semantic discovery (`search`), index lifecycle management (`index`, `status`, `clear`), surgical symbol extraction (`extract`), LSP-powered navigation (`refs`, `callers`, `implements`), project configuration (`init`, `config`), and LSP daemon lifecycle tooling (`lsp`).
 
 > **Benchmark results (Opus 4.6, 250K LOC Java codebase, 24 agent invocations):**
 > - Conceptual queries ("how does auth work?"): **51% faster, 25% cheaper, 69% fewer tool calls** vs no instructions
@@ -13,7 +13,22 @@ Unified code intelligence CLI for large codebases. `cs` combines semantic discov
 
 ## How it works
 
-`cs` has four complementary workflows:
+`cs` has five complementary workflows:
+
+### Unified retrieval (`cs <query>` / `cs query`)
+
+No external services required for symbol, path, and text queries. LSP daemon recommended for references, callers, and implementations.
+
+`cs <query>` is the default retrieval front door. It classifies the query (symbol, path, text, or AST), fetches the definition via Tree-sitter, resolves references/callers/implementations via LSP in parallel, scores and ranks evidence, slices long definitions to fit an adaptive line budget, and returns LLM-facing Markdown — all in one call.
+
+```bash
+cs Authenticate                       # symbol lookup + refs + callers
+cs auth.Login --depth 2               # deeper caller expansion
+cs pkg/auth.go                        # path discovery
+cs "connection refused"               # text search
+cs Authenticate --budget large        # more context
+cs query Authenticate --mode symbol   # explicit routing
+```
 
 ### Semantic search and index lifecycle (`cs search`, `cs index`, `cs status`, `cs clear`)
 
@@ -60,6 +75,7 @@ All other languages fall back to line-based chunking for indexing.
 ### Prerequisites
 
 Works locally with no external services:
+- `cs <query>` (symbol, path, and text modes)
 - `cs extract`
 - `cs init`
 - `cs config`
@@ -138,6 +154,16 @@ cs status /path/to/repo
 cs clear /path/to/repo
 ```
 
+### Unified query
+
+```bash
+cs Authenticate                          # symbol + refs + callers
+cs Authenticate --depth 2 --budget large # deeper callers, more context
+cs pkg/auth.go                           # path discovery
+cs "connection refused"                  # text search
+cs query Authenticate --mode symbol      # explicit subcommand + mode
+```
+
 ### Extract a symbol
 
 ```bash
@@ -182,6 +208,7 @@ All commands support `-v, --verbose`.
 
 | Command | Signature | Notes |
 |---|---|---|
+| `cs <query>` | `cs <query> [--path <dir>] [--depth <n>] [--budget auto\|small\|medium\|large] [--mode auto\|symbol\|text\|ast\|path]` | Unified retrieval front door; also available as `cs query <query>` |
 | `cs index` | `cs index [path] [--branch <name>] [--commit <sha>] [--force]` | Creates or refreshes the semantic index |
 | `cs search` | `cs search <query> [--path <dir>] [--ext .go,.ts] [--limit <n>]` | Semantic discovery |
 | `cs status` | `cs status [path]` | Reports index freshness |
@@ -322,6 +349,7 @@ Without a mounted state directory, the commands are still correct; they just sta
 ```text
 cmd/cs/                Cobra command wiring
 pkg/
+├── engine/            Unified query router, scoring, budgeting, and rendering
 ├── config/            Config loading, precedence, and provenance
 ├── vectorstore/       Semantic search storage (Milvus)
 ├── embedding/         Embedding provider integration (Ollama)
@@ -347,22 +375,23 @@ Different agents have different failure modes, so each template is tuned accordi
 
 | Agent | Instruction file | Template | Tuned for |
 |---|---|---|---|
-| Claude Code | `CLAUDE.md` | [TPL_CLAUDE.md](TPL_CLAUDE.md) | Tends to over-read for “confidence” and sometimes skips tools — template emphasizes focused extraction and tool routing |
-| Codex | `AGENTS.md` | [TPL_AGENTS.md](TPL_AGENTS.md) | Tends to overuse `read_file` and chain grep-read loops — template enforces strict read discipline and tool ordering |
-| Gemini CLI | `GEMINI.md` | [TPL_GEMINI.md](TPL_GEMINI.md) | Tends to overuse semantic search for simple lookups — template focuses on preventing `cs search` misuse |
+| Claude Code | `CLAUDE.md` | [TPL_CLAUDE.md](TPL_CLAUDE.md) | Tends to over-read for “confidence” and sometimes skips tools — template enforces `cs <query>` as the default retrieval front door |
+| Codex | `AGENTS.md` | [TPL_AGENTS.md](TPL_AGENTS.md) | Tends to overuse `read_file` and chain grep-read loops — template enforces strict `cs`-first retrieval policy |
+| Gemini CLI | `GEMINI.md` | [TPL_GEMINI.md](TPL_GEMINI.md) | Tends to overuse semantic search for simple lookups — template routes all first-pass retrieval through `cs <query>` |
 
 All three templates share the same routing logic:
 
 | Intent | Tool |
 |---|---|
-| Exact lookup (symbol, string, path) | `grep` / `find` |
-| Conceptual discovery (unknown files) | `cs search “<query>” --path .` |
-| Single symbol from a large file | `cs extract -f <file> -s <symbol>` |
-| Cross-file references | `cs refs`, `cs callers`, `cs implements` |
+| Any code retrieval (first pass) | `cs <query>` |
+| Conceptual / architectural discovery | `cs search “<query>” --path .` |
+| Raw symbol body | `cs extract -f <file> -s <symbol>` |
+| Shell fallback (after cs says to) | `grep` / `tail` |
+| Execution (tests, builds, git) | shell tools |
 
 
 > [!IMPORTANT]
-> Keep context-dependent `cs` workflows project-scoped. `cs search`, `cs index`, `cs status`, `cs clear`, `cs refs`, `cs callers`, `cs implements`, and `cs lsp` depend on workspace-specific context such as project path, index state, and installed language servers, so those instructions belong in project-level files. Tree-sitter-based symbol extraction such as `cs extract` can be enabled in global instructions, but only if the global rule is explicit about that narrower scope and does not route agents into the project-context-dependent commands above.
+> Keep context-dependent `cs` workflows project-scoped. `cs <query>`, `cs search`, `cs index`, `cs status`, `cs clear`, `cs refs`, `cs callers`, `cs implements`, and `cs lsp` depend on workspace-specific context such as project path, index state, and installed language servers, so those instructions belong in project-level files. Tree-sitter-based symbol extraction such as `cs extract` can be enabled in global instructions, but only if the global rule is explicit about that narrower scope and does not route agents into the project-context-dependent commands above.
 
 ### Step 2: allow `cs` commands
 
@@ -389,11 +418,12 @@ Prebuilt skill files are available if you want additional agent-facing reference
 ### Verification
 
 Ask the agent:
-- `Where is authentication handled?` -> should start with `cs search`
-- `Extract SecurityConfig from SecurityConfig.java` -> should use `cs extract`
-- `Who calls processPayment?` -> should use `cs refs` or `cs callers`
+- `Where is authentication handled?` -> should start with `cs Authenticate` or `cs search`
+- `What does processPayment do?` -> should use `cs processPayment`
+- `Who calls processPayment?` -> should use `cs processPayment --depth 2`
+- `Extract SecurityConfig from SecurityConfig.java` -> should use `cs SecurityConfig` or `cs extract`
 
-If the agent falls back to broad grep and full-file reads for conceptual work, check both the project instructions and the shell permission allowlist.
+If the agent falls back to broad grep and full-file reads for first-pass retrieval, check both the project instructions and the shell permission allowlist.
 
 ## License
 

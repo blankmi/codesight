@@ -1,56 +1,55 @@
 # Code navigation policy
 
-Use the lowest-cost operation that can answer the question.
+Use `cs` as the default retrieval front door.
 Avoid reading full files unless necessary.
 
-## Exact lookup
-Use `grep`, `find`, or filename search when the target is specific:
-- symbol names (class, function, type)
-- exact strings, logs, constants
-- filenames or paths
-- import statements
+## Repository retrieval policy
 
-Do NOT use `cs search` for exact matches.
+1. Use `cs <query>` FIRST for all symbol lookups, references, callers, path discovery, stack-trace lookups, and code searches.
+2. DO NOT use `grep`, `find`, `cat`, or `ls -R` for first-pass retrieval when `cs` can answer.
+3. Use shell retrieval ONLY if `cs` returns `not_found`, `ambiguous`, or explicitly instructs you to use `grep`/`tail` for large non-code files.
+4. Use shell tools for execution tasks only: tests, builds, git, and patching.
 
-## Conceptual discovery
-Use `cs search "<question>" --path .` when:
-- the relevant files are unknown
-- the question is about behavior or architecture
+## Unified retrieval
 
-Examples: how authentication works, where retries are implemented, how request context flows.
+Use `cs <query>` (or `cs query <query>`) as the single entry point:
+- symbol lookup: `cs Authenticate`
+- references + callers + implements: `cs auth.Login --depth 2`
+- path discovery: `cs pkg/auth.go`
+- text / error search: `cs "connection refused"`
+- broader context: `cs Authenticate --budget large`
 
-Do this BEFORE opening multiple files.
+`cs` routes internally, fetches ranked evidence, slices definitions to fit the context budget, and returns Markdown. One call replaces multi-step extract → refs → callers chains.
 
-## Targeted reading
-Use `cs extract -f <file> -s <symbol>` when:
-- the file is large
-- only one class, function, or type is needed
+## When to use other cs commands
 
-Only use `read_file` when:
-- the file is small, or
-- full context is clearly required
+Fall back to individual commands only when the unified query is insufficient:
+- `cs search "<question>" --path .` for semantic / conceptual discovery (requires Milvus + Ollama)
+- `cs extract -f <file> -s <symbol>` for raw symbol extraction when you need the full body
+- `cs refs`, `cs callers`, `cs implements` for standalone navigation when you need unranked, unbudgeted output
+
+## Reading discipline
+
+Do NOT:
+- open many full files during exploration
+- read large files before trying `cs <query>` first
+- read files sequentially when they can be batched
+- use `grep` or `find` when `cs` can answer the same question
 
 Before reading, identify all needed files first. Batch reads in parallel instead of reading one file at a time.
 
-## Cross-file navigation
-Use instead of repeated grep:
-- `cs refs <symbol>` for references
-- `cs callers <symbol>` for call hierarchy
-- `cs implements <symbol>` for implementations
-
-## Reading discipline
-Do NOT:
-- open many full files during exploration
-- read large files before narrowing candidates
-- read files sequentially when they can be batched
-
-For conceptual tasks, follow this order strictly:
-1. `cs search` to narrow scope
-2. `cs extract` to inspect symbols
-3. full file read only if needed
+For any code investigation, follow this order strictly:
+1. `cs <query>` to get symbol + ranked references + callers
+2. follow `next_hint` if broader context is needed
+3. `cs search` for conceptual discovery if the symbol is unknown
+4. full file read only if `cs` output is insufficient
 
 ## Routing summary
-- known target -> grep / find
-- unknown area -> `cs search`
-- single symbol -> `cs extract`
-- relationships -> `cs refs` / `cs callers` / `cs implements`
+
+| Intent | Tool |
+|---|---|
+| Any code retrieval (first pass) | `cs <query>` |
+| Conceptual / architectural discovery | `cs search` |
+| Raw symbol body | `cs extract` |
+| Shell fallback (after cs says to) | `grep` / `tail` |
+| Execution (tests, builds, git) | shell tools |
