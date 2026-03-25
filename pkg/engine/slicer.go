@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/blankbytes/codesight/pkg/splitter"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 const (
@@ -101,10 +101,13 @@ func findSalientSlices(source []byte, language string, startLine, endLine int) [
 	}
 
 	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
+	defer parser.Close()
+	if err := parser.SetLanguage(lang); err != nil {
+		return findSalientSlicesByText(source, startLine, endLine)
+	}
 
-	tree, err := parser.ParseCtx(context.Background(), nil, source)
-	if err != nil {
+	tree := parser.ParseCtx(context.Background(), source, nil)
+	if tree == nil {
 		return findSalientSlicesByText(source, startLine, endLine)
 	}
 	defer tree.Close()
@@ -123,22 +126,22 @@ func findErrorAndIOSlices(root *sitter.Node, source []byte, startLine, endLine i
 			return
 		}
 
-		nodeLine := int(node.StartPoint().Row) + 1
+		nodeLine := int(node.StartPosition().Row) + 1
 		if nodeLine < startLine || nodeLine > endLine {
-			for i := 0; i < int(node.ChildCount()); i++ {
+			for i := uint(0); i < node.ChildCount(); i++ {
 				walk(node.Child(i))
 			}
 			return
 		}
 
-		nodeType := node.Type()
-		content := node.Content(source)
+		nodeKind := node.Kind()
+		content := string(source[node.StartByte():node.EndByte()])
 
-		isErrorPath := (nodeType == "if_statement" &&
+		isErrorPath := (nodeKind == "if_statement" &&
 			(strings.Contains(content, "err != nil") || strings.Contains(content, "err :="))) ||
-			nodeType == "try_statement" || nodeType == "catch_clause"
+			nodeKind == "try_statement" || nodeKind == "catch_clause"
 
-		isIO := nodeType == "call_expression" &&
+		isIO := nodeKind == "call_expression" &&
 			(strings.Contains(content, "Read") || strings.Contains(content, "Write") ||
 				strings.Contains(content, "Open") || strings.Contains(content, "Close") ||
 				strings.Contains(content, "Get") || strings.Contains(content, "Post") ||
@@ -153,7 +156,7 @@ func findErrorAndIOSlices(root *sitter.Node, source []byte, startLine, endLine i
 				reason = "external I/O"
 			}
 
-			sliceEnd := int(node.EndPoint().Row) + 1
+			sliceEnd := int(node.EndPosition().Row) + 1
 			if sliceEnd-nodeLine > salientSliceSize {
 				sliceEnd = nodeLine + salientSliceSize - 1
 			}
@@ -169,7 +172,7 @@ func findErrorAndIOSlices(root *sitter.Node, source []byte, startLine, endLine i
 			})
 		}
 
-		for i := 0; i < int(node.ChildCount()); i++ {
+		for i := uint(0); i < node.ChildCount(); i++ {
 			walk(node.Child(i))
 		}
 	}

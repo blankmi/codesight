@@ -120,12 +120,33 @@ func (e *Engine) querySymbol(ctx context.Context, result *SymbolIntelligence, fi
 		if bodyLines > budget.DefinitionLines {
 			source, err := os.ReadFile(def.File)
 			if err == nil {
-				sig, slices, strategy := SliceDefinition(source, def.Language, def.Line, def.EndLine, budget.DefinitionLines)
-				def.Signature = sig
-				def.Slices = slices
-				def.ViewStrategy = strategy
-				if strategy == "signature_plus_slices" {
-					def.Body = "" // body is represented via slices
+				if IsClassLikeType(def.Type) && !isFailureCueQuery(result.Query) {
+					sig, outline, topMethods, strategy := OutlineClassDefinition(
+						source, def.Language, symbol, def.Line, def.EndLine, budget.DefinitionLines)
+					if strategy == "signature_plus_outline" {
+						def.Signature = sig
+						def.Outline = outline
+						def.Slices = topMethods
+						def.ViewStrategy = strategy
+						def.Body = ""
+					} else {
+						// OutlineClassDefinition returned "" (AST failure); fall back to slices.
+						sig, slices, strategy := SliceDefinition(source, def.Language, def.Line, def.EndLine, budget.DefinitionLines)
+						def.Signature = sig
+						def.Slices = slices
+						def.ViewStrategy = strategy
+						if strategy == "signature_plus_slices" {
+							def.Body = ""
+						}
+					}
+				} else {
+					sig, slices, strategy := SliceDefinition(source, def.Language, def.Line, def.EndLine, budget.DefinitionLines)
+					def.Signature = sig
+					def.Slices = slices
+					def.ViewStrategy = strategy
+					if strategy == "signature_plus_slices" {
+						def.Body = ""
+					}
 				}
 			}
 		} else {
@@ -264,11 +285,11 @@ func (e *Engine) queryText(ctx context.Context, result *SymbolIntelligence, filt
 			result.Meta.Errors = append(result.Meta.Errors, "text search: "+err.Error())
 		} else if len(refs) > 0 {
 			result.Status = "ok"
+			result.Meta.Confidence = 0.50
 			result.Meta.RefsTotal = len(refs)
-			result.References = refs
-			if len(result.References) > maxItems {
-				result.References = result.References[:maxItems]
-			}
+			// Score text refs using the first match as anchor for proximity.
+			anchor := refs[0].File
+			result.References = ScoreReferences(refs, anchor, maxItems)
 			result.Meta.RefsShown = len(result.References)
 			result.Meta.RefsSource = source
 
@@ -302,6 +323,7 @@ func (e *Engine) queryText(ctx context.Context, result *SymbolIntelligence, filt
 	}
 	if len(refs) > 0 {
 		result.Status = "ok"
+		result.Meta.Confidence = 0.40
 		result.Meta.RefsTotal = len(refs)
 		result.References = refs
 		result.Meta.RefsShown = len(refs)

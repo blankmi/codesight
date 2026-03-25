@@ -95,9 +95,14 @@ func renderDefinition(b *strings.Builder, def *SymDefinition) {
 		fmt.Fprintf(b, "```%s\n%s\n```\n\n", lang, def.Signature)
 	}
 
-	if def.ViewStrategy == "full_body" && def.Body != "" {
-		fmt.Fprintf(b, "```%s\n%s\n```\n\n", lang, def.Body)
-	} else if len(def.Slices) > 0 {
+	switch def.ViewStrategy {
+	case "full_body":
+		if def.Body != "" {
+			fmt.Fprintf(b, "```%s\n%s\n```\n\n", lang, def.Body)
+		}
+	case "signature_plus_outline":
+		renderOutline(b, def, lang)
+	default: // signature_plus_slices
 		for _, s := range def.Slices {
 			fmt.Fprintf(b, "### %s (lines %d-%d)\n", s.Label, s.StartLine, s.EndLine)
 			fmt.Fprintf(b, "```%s\n%s\n```\n", lang, s.Code)
@@ -105,6 +110,53 @@ func renderDefinition(b *strings.Builder, def *SymDefinition) {
 			if omitted > 0 {
 				fmt.Fprintf(b, "... %d lines shown ...\n\n", omitted)
 			}
+		}
+	}
+}
+
+func renderOutline(b *strings.Builder, def *SymDefinition, lang string) {
+	if len(def.Outline) > 0 {
+		fmt.Fprintf(b, "### Member Outline (%d members)\n", len(def.Outline))
+		b.WriteString("| Line | Kind | Visibility | Name |\n")
+		b.WriteString("|------|------|------------|------|\n")
+		for _, e := range def.Outline {
+			vis := e.Visibility
+			if vis == "" {
+				vis = "-"
+			}
+			sig := e.Signature
+			if len(sig) > 80 {
+				sig = sig[:80] + "..."
+			}
+			fmt.Fprintf(b, "| %d | %s | %s | `%s` |\n", e.Line, e.Kind, vis, sig)
+		}
+		b.WriteByte('\n')
+	}
+
+	// Expanded top method bodies.
+	if len(def.Slices) > 0 {
+		for _, s := range def.Slices {
+			fmt.Fprintf(b, "### %s (lines %d-%d)\n", s.Label, s.StartLine, s.EndLine)
+			fmt.Fprintf(b, "```%s\n%s\n```\n\n", lang, s.Code)
+		}
+
+		// Continuation hint: list remaining methods not expanded.
+		var remaining []string
+		expandedNames := make(map[string]bool)
+		for _, s := range def.Slices {
+			name := strings.TrimPrefix(s.Label, "Method: ")
+			expandedNames[name] = true
+		}
+		for _, e := range def.Outline {
+			if (e.Kind == "method" || e.Kind == "constructor") && !expandedNames[e.Name] {
+				remaining = append(remaining, e.Name)
+			}
+		}
+		if len(remaining) > 0 {
+			if len(remaining) > 6 {
+				remaining = remaining[:6]
+			}
+			fmt.Fprintf(b, "> Next most relevant methods: `%s`\n\n", strings.Join(remaining, "`, `"))
 		}
 	}
 }
@@ -176,6 +228,9 @@ func estimateUsedLines(r *SymbolIntelligence) int {
 		}
 		for _, s := range r.Definition.Slices {
 			used += strings.Count(s.Code, "\n") + 3 // slice header + code + spacing
+		}
+		if len(r.Definition.Outline) > 0 {
+			used += len(r.Definition.Outline) + 3 // table header + entries
 		}
 	}
 

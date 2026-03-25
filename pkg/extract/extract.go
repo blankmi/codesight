@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	csignore "github.com/blankbytes/codesight/pkg/ignore"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 var errSymbolNotFound = errors.New("symbol not found")
@@ -182,11 +182,14 @@ func findSymbolInFile(path string, symbol string) (SymbolMatch, error) {
 	}
 
 	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
+	defer parser.Close()
+	if err := parser.SetLanguage(lang); err != nil {
+		return SymbolMatch{}, fmt.Errorf("set language: %w", err)
+	}
 
-	tree, err := parser.ParseCtx(context.Background(), nil, source)
-	if err != nil {
-		return SymbolMatch{}, fmt.Errorf("parse %s: %w", filepath.ToSlash(path), err)
+	tree := parser.ParseCtx(context.Background(), source, nil)
+	if tree == nil {
+		return SymbolMatch{}, fmt.Errorf("parse %s: parser returned nil tree", filepath.ToSlash(path))
 	}
 	defer tree.Close()
 
@@ -197,10 +200,10 @@ func findSymbolInFile(path string, symbol string) (SymbolMatch, error) {
 
 	return SymbolMatch{
 		Name:       name,
-		Code:       node.Content(source),
+		Code:       nodeContent(node, source),
 		FilePath:   filepath.ToSlash(path),
-		StartLine:  int(node.StartPoint().Row) + 1,
-		EndLine:    int(node.EndPoint().Row) + 1,
+		StartLine:  int(node.StartPosition().Row) + 1,
+		EndLine:    int(node.EndPosition().Row) + 1,
 		StartByte:  int(node.StartByte()),
 		EndByte:    int(node.EndByte()),
 		SymbolType: symbolType,
@@ -232,7 +235,7 @@ func findMatchingSymbolNode(node *sitter.Node, source []byte, language string, s
 		return node, symbolType, name, true
 	}
 
-	for i := 0; i < int(node.NamedChildCount()); i++ {
+	for i := uint(0); i < node.NamedChildCount(); i++ {
 		child := node.NamedChild(i)
 		if child == nil {
 			continue
@@ -268,7 +271,7 @@ func symbolInfoForNode(node *sitter.Node, source []byte, language string) (strin
 }
 
 func symbolInfoForGo(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "function_declaration":
 		name := nameFromField(node, "name", source)
 		if name == "" {
@@ -288,7 +291,7 @@ func symbolInfoForGo(node *sitter.Node, source []byte) (string, string, bool) {
 		}
 		symbolType := "type"
 		if typeNode := node.ChildByFieldName("type"); typeNode != nil {
-			switch typeNode.Type() {
+			switch typeNode.Kind() {
 			case "struct_type":
 				symbolType = "struct"
 			case "interface_type":
@@ -314,7 +317,7 @@ func symbolInfoForGo(node *sitter.Node, source []byte) (string, string, bool) {
 }
 
 func matchGoNamedSpec(node *sitter.Node, source []byte, symbol string) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "const_spec":
 		for _, name := range namesFromField(node, "name", source) {
 			if name == symbol {
@@ -332,7 +335,7 @@ func matchGoNamedSpec(node *sitter.Node, source []byte, symbol string) (string, 
 }
 
 func symbolInfoForPython(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "function_definition", "async_function_definition":
 		name := nameFromField(node, "name", source)
 		if name == "" {
@@ -351,7 +354,7 @@ func symbolInfoForPython(node *sitter.Node, source []byte) (string, string, bool
 }
 
 func symbolInfoForJava(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "method_declaration":
 		name := nameFromField(node, "name", source)
 		if name == "" {
@@ -388,7 +391,7 @@ func symbolInfoForJava(node *sitter.Node, source []byte) (string, string, bool) 
 }
 
 func symbolInfoForJSTS(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "function_declaration":
 		name := nameFromField(node, "name", source)
 		if name == "" {
@@ -430,8 +433,8 @@ func symbolInfoForJSTS(node *sitter.Node, source []byte) (string, string, bool) 
 		if name == "" {
 			return "", "", false
 		}
-		if parent := node.Parent(); parent != nil && parent.Type() == "lexical_declaration" {
-			content := strings.TrimSpace(parent.Content(source))
+		if parent := node.Parent(); parent != nil && parent.Kind() == "lexical_declaration" {
+			content := strings.TrimSpace(nodeContent(parent, source))
 			if strings.HasPrefix(content, "const ") {
 				return name, "constant", true
 			}
@@ -443,7 +446,7 @@ func symbolInfoForJSTS(node *sitter.Node, source []byte) (string, string, bool) 
 }
 
 func symbolInfoForRust(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "function_item":
 		name := nameFromField(node, "name", source)
 		if name == "" {
@@ -492,13 +495,13 @@ func symbolInfoForRust(node *sitter.Node, source []byte) (string, string, bool) 
 }
 
 func symbolInfoForCPP(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "function_definition":
 		nameNode := findFunctionNameNode(node.ChildByFieldName("declarator"))
 		if nameNode == nil {
 			return "", "", false
 		}
-		name := strings.TrimSpace(nameNode.Content(source))
+		name := strings.TrimSpace(nodeContent(nameNode, source))
 		if name == "" {
 			return "", "", false
 		}
@@ -527,7 +530,7 @@ func symbolInfoForCPP(node *sitter.Node, source []byte) (string, string, bool) {
 }
 
 func symbolInfoForHTML(node *sitter.Node, source []byte) (string, string, bool) {
-	switch node.Type() {
+	switch node.Kind() {
 	case "element":
 		startTag := findNamedChildByType(node, "start_tag")
 		if startTag == nil {
@@ -540,7 +543,7 @@ func symbolInfoForHTML(node *sitter.Node, source []byte) (string, string, bool) 
 		if tagName == nil {
 			return "", "", false
 		}
-		name := strings.TrimSpace(tagName.Content(source))
+		name := strings.TrimSpace(nodeContent(tagName, source))
 		if name == "" {
 			return "", "", false
 		}
@@ -550,7 +553,7 @@ func symbolInfoForHTML(node *sitter.Node, source []byte) (string, string, bool) 
 		if tagName == nil {
 			return "", "", false
 		}
-		name := strings.TrimSpace(tagName.Content(source))
+		name := strings.TrimSpace(nodeContent(tagName, source))
 		if name == "" {
 			return "", "", false
 		}
@@ -568,7 +571,7 @@ func nameFromField(node *sitter.Node, field string, source []byte) string {
 	if child == nil {
 		return ""
 	}
-	return strings.TrimSpace(child.Content(source))
+	return strings.TrimSpace(nodeContent(child, source))
 }
 
 func namesFromField(node *sitter.Node, field string, source []byte) []string {
@@ -579,15 +582,15 @@ func namesFromField(node *sitter.Node, field string, source []byte) []string {
 	names := make([]string, 0)
 	seen := make(map[string]struct{})
 
-	for i := 0; i < int(node.ChildCount()); i++ {
+	for i := uint(0); i < node.ChildCount(); i++ {
 		child := node.Child(i)
 		if child == nil || !child.IsNamed() {
 			continue
 		}
-		if node.FieldNameForChild(i) != field {
+		if node.FieldNameForChild(uint32(i)) != field {
 			continue
 		}
-		name := strings.TrimSpace(child.Content(source))
+		name := strings.TrimSpace(nodeContent(child, source))
 		if name == "" {
 			continue
 		}
@@ -601,13 +604,13 @@ func namesFromField(node *sitter.Node, field string, source []byte) []string {
 	return names
 }
 
-func findNamedChildByType(node *sitter.Node, nodeType string) *sitter.Node {
+func findNamedChildByType(node *sitter.Node, nodeKind string) *sitter.Node {
 	if node == nil {
 		return nil
 	}
-	for i := 0; i < int(node.NamedChildCount()); i++ {
+	for i := uint(0); i < node.NamedChildCount(); i++ {
 		child := node.NamedChild(i)
-		if child != nil && child.Type() == nodeType {
+		if child != nil && child.Kind() == nodeKind {
 			return child
 		}
 	}
@@ -619,12 +622,13 @@ func findFunctionNameNode(node *sitter.Node) *sitter.Node {
 		return nil
 	}
 
-	switch node.Type() {
+	switch node.Kind() {
 	case "identifier", "field_identifier", "operator_name", "destructor_name", "type_identifier":
 		return node
 	case "qualified_identifier", "scoped_identifier":
-		for i := int(node.NamedChildCount()) - 1; i >= 0; i-- {
-			child := node.NamedChild(i)
+		count := node.NamedChildCount()
+		for i := count; i > 0; i-- {
+			child := node.NamedChild(i - 1)
 			if named := findFunctionNameNode(child); named != nil {
 				return named
 			}
@@ -632,7 +636,7 @@ func findFunctionNameNode(node *sitter.Node) *sitter.Node {
 		return nil
 	}
 
-	for i := 0; i < int(node.NamedChildCount()); i++ {
+	for i := uint(0); i < node.NamedChildCount(); i++ {
 		child := node.NamedChild(i)
 		if named := findFunctionNameNode(child); named != nil {
 			return named
@@ -640,4 +644,11 @@ func findFunctionNameNode(node *sitter.Node) *sitter.Node {
 	}
 
 	return nil
+}
+
+func nodeContent(node *sitter.Node, source []byte) string {
+	if node == nil {
+		return ""
+	}
+	return string(source[node.StartByte():node.EndByte()])
 }

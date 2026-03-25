@@ -19,10 +19,13 @@ func TestScoreReferences(t *testing.T) {
 		t.Fatalf("len = %d, want 4", len(scored))
 	}
 
-	// All should have non-zero scores.
+	// All should have non-zero scores and populated reasons.
 	for i, ref := range scored {
 		if ref.Score == 0 {
 			t.Errorf("scored[%d].Score = 0, want non-zero", i)
+		}
+		if ref.Reason == "" {
+			t.Errorf("scored[%d].Reason is empty, want scoring explanation", i)
 		}
 	}
 

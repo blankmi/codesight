@@ -22,10 +22,21 @@ type SymDefinition struct {
 	Type         string // function, method, class, interface, struct, etc.
 	Signature    string
 	Docstring    string
-	Body         string      // populated only if within budget
-	Slices       []CodeSlice // used for long bodies
-	ViewStrategy string      // full_body | signature_plus_slices
+	Body         string         // populated only if within budget
+	Slices       []CodeSlice    // used for long bodies or top method expansions
+	Outline      []OutlineEntry // member outline for class-like symbols
+	ViewStrategy string         // full_body | signature_plus_slices | signature_plus_outline
 	Language     string
+}
+
+// OutlineEntry describes a member of a class-like symbol.
+type OutlineEntry struct {
+	Name       string // member name
+	Kind       string // method, field, constructor, nested_type, etc.
+	Line       int    // start line (1-indexed)
+	EndLine    int    // end line (1-indexed)
+	Signature  string // one-line signature
+	Visibility string // public, private, protected, "" (unknown)
 }
 
 // CodeSlice is a labeled excerpt from a definition body.

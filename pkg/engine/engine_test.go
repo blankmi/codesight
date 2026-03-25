@@ -92,6 +92,9 @@ func TestQueryTextFallsBackToSemanticSearch(t *testing.T) {
 	if !strings.Contains(chain, "semantic") {
 		t.Errorf("SearchChain = %v, expected semantic", result.Meta.SearchChain)
 	}
+	if result.Meta.Confidence != 0.40 {
+		t.Errorf("Confidence = %v, want 0.40 for semantic fallback", result.Meta.Confidence)
+	}
 }
 
 func TestQueryTextSkipsSemanticWhenGrepSucceeds(t *testing.T) {
@@ -122,6 +125,76 @@ func TestQueryTextSkipsSemanticWhenGrepSucceeds(t *testing.T) {
 	}
 	if result.Meta.RefsSource != "grep" {
 		t.Errorf("RefsSource = %q, want grep", result.Meta.RefsSource)
+	}
+	if result.Meta.Confidence != 0.50 {
+		t.Errorf("Confidence = %v, want 0.50 for grep text search", result.Meta.Confidence)
+	}
+}
+
+func TestQueryTextGrepResultsAreScored(t *testing.T) {
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Refs: &mockRefsProvider{
+			refs: []SymReference{
+				{File: "pkg/foo.go", Line: 5, Snippet: "deleteSupplier(ctx)"},
+				{File: "pkg/bar.go", Line: 20, Snippet: "deleteSupplier(cfg)"},
+				{File: "pkg/baz.go", Line: 10, Snippet: "deleteSupplier(req)"},
+			},
+			source: "grep",
+		},
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "deleteSupplier",
+		Mode:  "text",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Meta.Confidence != 0.50 {
+		t.Errorf("Confidence = %v, want 0.50", result.Meta.Confidence)
+	}
+	// All refs have "(" in snippet so ScoreReferences should assign direct-call scores and reasons.
+	for i, ref := range result.References {
+		if ref.Score == 0 {
+			t.Errorf("References[%d].Score = 0, want non-zero", i)
+		}
+		if ref.Reason == "" {
+			t.Errorf("References[%d].Reason is empty, want scoring explanation", i)
+		}
+	}
+	// Verify refs are sorted descending by score.
+	for i := 1; i < len(result.References); i++ {
+		if result.References[i].Score > result.References[i-1].Score {
+			t.Errorf("References not sorted by score: [%d].Score=%v > [%d].Score=%v",
+				i, result.References[i].Score, i-1, result.References[i-1].Score)
+		}
+	}
+}
+
+func TestQuerySymbolConfidence(t *testing.T) {
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Extractor: &mockExtractor{
+			def: &SymDefinition{
+				File: "pkg/auth.go", Line: 10, EndLine: 20,
+				Type: "function", Language: "go", Body: "func F() {}",
+			},
+		},
+		Refs:    &mockRefsProvider{source: "lsp"},
+		Callers: &mockCallersProvider{},
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "F",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Meta.Confidence != 0.85 {
+		t.Errorf("Confidence = %v, want 0.85 for symbol search", result.Meta.Confidence)
 	}
 }
 

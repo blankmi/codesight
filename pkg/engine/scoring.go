@@ -26,7 +26,7 @@ func ScoreReferences(refs []SymReference, defFile string, maxItems int) []SymRef
 	fileCounts := countByFile(refs)
 
 	for i := range refs {
-		refs[i].Score = scoreRef(refs[i], defFile, defDir, fileCounts)
+		scoreRef(&refs[i], defFile, defDir, fileCounts)
 	}
 
 	sort.SliceStable(refs, func(i, j int) bool {
@@ -62,7 +62,7 @@ func ScoreCallers(callers []SymCaller, defFile string, maxItems int) []SymCaller
 	return callers
 }
 
-func scoreRef(ref SymReference, defFile, defDir string, fileCounts map[string]int) float64 {
+func scoreRef(ref *SymReference, defFile, defDir string, fileCounts map[string]int) {
 	score := 0.0
 
 	// Direct call bonus: snippet contains function-call-like pattern.
@@ -94,7 +94,7 @@ func scoreRef(ref SymReference, defFile, defDir string, fileCounts map[string]in
 		score -= penaltyNearDuplicate
 	}
 
-	return score
+	ref.Score = score
 }
 
 func scoreCaller(caller SymCaller, defFile, defDir string) float64 {

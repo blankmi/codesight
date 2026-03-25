@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/cpp"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/javascript"
-	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/rust"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_cpp "github.com/tree-sitter/tree-sitter-cpp/bindings/go"
+	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
+	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
+	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 // maxChunkLines is the maximum number of lines a single chunk can span before
@@ -61,10 +61,13 @@ func (t *TreeSitterSplitter) Split(code string, language string, filePath string
 	}
 
 	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
+	defer parser.Close()
+	if err := parser.SetLanguage(lang); err != nil {
+		return t.fallback.Split(code, language, filePath)
+	}
 
-	tree, err := parser.ParseCtx(context.Background(), nil, []byte(code))
-	if err != nil {
+	tree := parser.ParseCtx(context.Background(), []byte(code), nil)
+	if tree == nil {
 		return t.fallback.Split(code, language, filePath)
 	}
 	defer tree.Close()
@@ -100,11 +103,11 @@ func (t *TreeSitterSplitter) Split(code string, language string, filePath string
 }
 
 func (t *TreeSitterSplitter) walkNode(node *sitter.Node, code string, lines []string, filePath string, language string, nodeTypes map[string]string, chunks *[]Chunk) {
-	typeName := node.Type()
+	typeName := node.Kind()
 
 	if label, ok := nodeTypes[typeName]; ok {
-		startLine := int(node.StartPoint().Row) + 1
-		endLine := int(node.EndPoint().Row) + 1
+		startLine := int(node.StartPosition().Row) + 1
+		endLine := int(node.EndPosition().Row) + 1
 		content := extractLines(lines, startLine, endLine)
 
 		*chunks = append(*chunks, Chunk{
@@ -118,7 +121,7 @@ func (t *TreeSitterSplitter) walkNode(node *sitter.Node, code string, lines []st
 		return // don't recurse into matched nodes
 	}
 
-	for i := 0; i < int(node.ChildCount()); i++ {
+	for i := uint(0); i < node.ChildCount(); i++ {
 		child := node.Child(i)
 		t.walkNode(child, code, lines, filePath, language, nodeTypes, chunks)
 	}
@@ -142,19 +145,19 @@ func GetLanguage(lang string) *sitter.Language {
 func getLanguage(lang string) *sitter.Language {
 	switch strings.ToLower(lang) {
 	case "go":
-		return golang.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_go.Language())
 	case "typescript", "tsx":
-		return typescript.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())
 	case "javascript", "jsx":
-		return javascript.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_javascript.Language())
 	case "python":
-		return python.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_python.Language())
 	case "java":
-		return java.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_java.Language())
 	case "rust":
-		return rust.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_rust.Language())
 	case "c", "cpp", "c++", "cc", "cxx":
-		return cpp.GetLanguage()
+		return sitter.NewLanguage(tree_sitter_cpp.Language())
 	default:
 		return nil
 	}
