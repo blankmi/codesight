@@ -15,6 +15,15 @@ func CollectionName(projectPath string) string {
 	return fmt.Sprintf("cs_%x", hash[:8])
 }
 
+// ResolveCollectionName returns the configured collection name when present,
+// otherwise it falls back to the deterministic per-path collection name.
+func ResolveCollectionName(projectPath string, override string) string {
+	if trimmed := strings.TrimSpace(override); trimmed != "" {
+		return trimmed
+	}
+	return CollectionName(projectPath)
+}
+
 // IsStale returns true if the indexed commit or ignore rules differ from the current state.
 func IsStale(meta *vectorstore.IndexMetadata, currentCommit string, currentIgnoreFingerprint string) bool {
 	if meta == nil {

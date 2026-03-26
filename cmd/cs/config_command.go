@@ -52,6 +52,7 @@ func buildConfigDisplayEntries(cfg *configpkg.Config, workspaceRoot string) []co
 
 	entries := []configDisplayEntry{
 		{Key: "db.address", Value: cfg.DB.Address, Source: configValueSource(cfg, "db.address")},
+		{Key: "db.collection_name", Value: cfg.DB.CollectionName, Source: configValueSource(cfg, "db.collection_name")},
 		{Key: "db.token", Value: cfg.DB.Token, Source: configValueSource(cfg, "db.token")},
 		{Key: "db.type", Value: cfg.DB.Type, Source: configValueSource(cfg, "db.type")},
 		{Key: "embedding.max_input_chars", Value: strconv.Itoa(cfg.Embedding.MaxInputChars), Source: configValueSource(cfg, "embedding.max_input_chars")},

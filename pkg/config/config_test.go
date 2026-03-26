@@ -20,6 +20,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.DB.Token != "" {
 		t.Fatalf("DB.Token = %q, want empty", cfg.DB.Token)
 	}
+	if cfg.DB.CollectionName != "" {
+		t.Fatalf("DB.CollectionName = %q, want empty", cfg.DB.CollectionName)
+	}
 
 	if cfg.Embedding.OllamaHost != "http://127.0.0.1:11434" {
 		t.Fatalf("Embedding.OllamaHost = %q, want %q", cfg.Embedding.OllamaHost, "http://127.0.0.1:11434")
@@ -79,6 +82,9 @@ func TestLoadConfig_UserOnly(t *testing.T) {
 	clearConfigEnv(t)
 
 	writeFile(t, filepath.Join(homeDir, ".codesight", "config.toml"), `
+[db]
+collection_name = "user-shared"
+
 [embedding]
 model = "user-model"
 max_input_chars = 2048
@@ -104,6 +110,9 @@ build_flags = ["-tags=integration"]
 	if cfg.DB.Address != "localhost:19530" {
 		t.Fatalf("DB.Address = %q, want default", cfg.DB.Address)
 	}
+	if cfg.DB.CollectionName != "user-shared" {
+		t.Fatalf("DB.CollectionName = %q, want %q", cfg.DB.CollectionName, "user-shared")
+	}
 
 	if cfg.Provenance[keyEmbeddingModel] != userConfigSource {
 		t.Fatalf("Provenance[%q] = %q, want %q", keyEmbeddingModel, cfg.Provenance[keyEmbeddingModel], userConfigSource)
@@ -113,6 +122,9 @@ build_flags = ["-tags=integration"]
 	}
 	if cfg.Provenance[keyLSPGoBuildFlags] != userConfigSource {
 		t.Fatalf("Provenance[%q] = %q, want %q", keyLSPGoBuildFlags, cfg.Provenance[keyLSPGoBuildFlags], userConfigSource)
+	}
+	if cfg.Provenance[keyDBCollectionName] != userConfigSource {
+		t.Fatalf("Provenance[%q] = %q, want %q", keyDBCollectionName, cfg.Provenance[keyDBCollectionName], userConfigSource)
 	}
 }
 
@@ -129,6 +141,9 @@ model = "user-model"
 address = "user:19530"
 `)
 	writeFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+[db]
+collection_name = "project-shared"
+
 [embedding]
 model = "project-model"
 `)
@@ -144,12 +159,18 @@ model = "project-model"
 	if cfg.DB.Address != "user:19530" {
 		t.Fatalf("DB.Address = %q, want user value", cfg.DB.Address)
 	}
+	if cfg.DB.CollectionName != "project-shared" {
+		t.Fatalf("DB.CollectionName = %q, want %q", cfg.DB.CollectionName, "project-shared")
+	}
 
 	if cfg.Provenance[keyEmbeddingModel] != projectConfigSource {
 		t.Fatalf("Provenance[%q] = %q, want %q", keyEmbeddingModel, cfg.Provenance[keyEmbeddingModel], projectConfigSource)
 	}
 	if cfg.Provenance[keyDBAddress] != userConfigSource {
 		t.Fatalf("Provenance[%q] = %q, want %q", keyDBAddress, cfg.Provenance[keyDBAddress], userConfigSource)
+	}
+	if cfg.Provenance[keyDBCollectionName] != projectConfigSource {
+		t.Fatalf("Provenance[%q] = %q, want %q", keyDBCollectionName, cfg.Provenance[keyDBCollectionName], projectConfigSource)
 	}
 }
 
@@ -177,6 +198,7 @@ model = "project-model"
 	t.Setenv("CODESIGHT_DB_TYPE", "envdb")
 	t.Setenv("CODESIGHT_DB_ADDRESS", "env:19530")
 	t.Setenv("CODESIGHT_DB_TOKEN", "token-123")
+	t.Setenv("CODESIGHT_DB_COLLECTION_NAME", "env-shared")
 	t.Setenv("CODESIGHT_OLLAMA_HOST", "http://localhost:9999")
 	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model")
 	t.Setenv("CODESIGHT_OLLAMA_MAX_INPUT_CHARS", "8192")
@@ -197,6 +219,9 @@ model = "project-model"
 	}
 	if cfg.DB.Token != "token-123" {
 		t.Fatalf("DB.Token = %q, want env override", cfg.DB.Token)
+	}
+	if cfg.DB.CollectionName != "env-shared" {
+		t.Fatalf("DB.CollectionName = %q, want env override", cfg.DB.CollectionName)
 	}
 	if cfg.Embedding.OllamaHost != "http://localhost:9999" {
 		t.Fatalf("Embedding.OllamaHost = %q, want env override", cfg.Embedding.OllamaHost)
@@ -222,6 +247,9 @@ model = "project-model"
 	}
 	if cfg.Provenance[keyEmbeddingModel] != "CODESIGHT_EMBEDDING_MODEL" {
 		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_EMBEDDING_MODEL", keyEmbeddingModel, cfg.Provenance[keyEmbeddingModel])
+	}
+	if cfg.Provenance[keyDBCollectionName] != "CODESIGHT_DB_COLLECTION_NAME" {
+		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_DB_COLLECTION_NAME", keyDBCollectionName, cfg.Provenance[keyDBCollectionName])
 	}
 	if cfg.Provenance[keyEmbeddingMaxInput] != "CODESIGHT_OLLAMA_MAX_INPUT_CHARS" {
 		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_OLLAMA_MAX_INPUT_CHARS", keyEmbeddingMaxInput, cfg.Provenance[keyEmbeddingMaxInput])
@@ -278,6 +306,7 @@ address = "project:19530"
 `)
 	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model")
 	t.Setenv("CODESIGHT_DB_TYPE", "envdb")
+	t.Setenv("CODESIGHT_DB_COLLECTION_NAME", "env-shared")
 
 	cfg, err := LoadConfig(projectDir)
 	if err != nil {
@@ -295,6 +324,9 @@ address = "project:19530"
 	}
 	if cfg.Provenance[keyEmbeddingModel] != "CODESIGHT_EMBEDDING_MODEL" {
 		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_EMBEDDING_MODEL", keyEmbeddingModel, cfg.Provenance[keyEmbeddingModel])
+	}
+	if cfg.Provenance[keyDBCollectionName] != "CODESIGHT_DB_COLLECTION_NAME" {
+		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_DB_COLLECTION_NAME", keyDBCollectionName, cfg.Provenance[keyDBCollectionName])
 	}
 	if cfg.Provenance[keyIndexWarmLSP] != userConfigSource {
 		t.Fatalf("Provenance[%q] = %q, want %q", keyIndexWarmLSP, cfg.Provenance[keyIndexWarmLSP], userConfigSource)
@@ -689,6 +721,7 @@ func clearConfigEnv(t *testing.T) {
 		envDBType,
 		envDBAddress,
 		envDBToken,
+		envDBCollectionName,
 		envOllamaHost,
 		envEmbeddingModel,
 		envMaxInputChars,

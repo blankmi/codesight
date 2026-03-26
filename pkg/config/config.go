@@ -23,6 +23,7 @@ const (
 	envDBType                = "CODESIGHT_DB_TYPE"
 	envDBAddress             = "CODESIGHT_DB_ADDRESS"
 	envDBToken               = "CODESIGHT_DB_TOKEN"
+	envDBCollectionName      = "CODESIGHT_DB_COLLECTION_NAME"
 	envOllamaHost            = "CODESIGHT_OLLAMA_HOST"
 	envEmbeddingModel        = "CODESIGHT_EMBEDDING_MODEL"
 	envMaxInputChars         = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
@@ -43,6 +44,7 @@ const (
 	keyDBType                = "db.type"
 	keyDBAddress             = "db.address"
 	keyDBToken               = "db.token"
+	keyDBCollectionName      = "db.collection_name"
 	keyEmbeddingOllama       = "embedding.ollama_host"
 	keyEmbeddingModel        = "embedding.model"
 	keyEmbeddingMaxInput     = "embedding.max_input_chars"
@@ -71,9 +73,10 @@ type Config struct {
 }
 
 type DBConfig struct {
-	Type    string `toml:"type"`
-	Address string `toml:"address"`
-	Token   string `toml:"token"`
+	Type           string `toml:"type"`
+	Address        string `toml:"address"`
+	Token          string `toml:"token"`
+	CollectionName string `toml:"collection_name"`
 }
 
 type EmbeddingConfig struct {
@@ -117,9 +120,10 @@ type layerConfig struct {
 }
 
 type layerDBConfig struct {
-	Type    *string `toml:"type"`
-	Address *string `toml:"address"`
-	Token   *string `toml:"token"`
+	Type           *string `toml:"type"`
+	Address        *string `toml:"address"`
+	Token          *string `toml:"token"`
+	CollectionName *string `toml:"collection_name"`
 }
 
 type layerEmbeddingConfig struct {
@@ -156,9 +160,10 @@ type layerIndexConfig struct {
 func Defaults() *Config {
 	cfg := &Config{
 		DB: DBConfig{
-			Type:    defaultDBType,
-			Address: defaultDBAddress,
-			Token:   "",
+			Type:           defaultDBType,
+			Address:        defaultDBAddress,
+			Token:          "",
+			CollectionName: "",
 		},
 		Embedding: EmbeddingConfig{
 			OllamaHost:    defaultOllamaHost,
@@ -403,6 +408,10 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 		cfg.DB.Token = *layer.DB.Token
 		cfg.Provenance[keyDBToken] = source
 	}
+	if layer.DB.CollectionName != nil {
+		cfg.DB.CollectionName = *layer.DB.CollectionName
+		cfg.Provenance[keyDBCollectionName] = source
+	}
 
 	if layer.Embedding.OllamaHost != nil {
 		cfg.Embedding.OllamaHost = *layer.Embedding.OllamaHost
@@ -483,6 +492,10 @@ func applyEnv(cfg *Config) error {
 		cfg.DB.Token = value
 		cfg.Provenance[keyDBToken] = envDBToken
 	}
+	if value, ok := os.LookupEnv(envDBCollectionName); ok {
+		cfg.DB.CollectionName = value
+		cfg.Provenance[keyDBCollectionName] = envDBCollectionName
+	}
 
 	if value, ok := os.LookupEnv(envOllamaHost); ok && value != "" {
 		cfg.Embedding.OllamaHost = value
@@ -557,6 +570,7 @@ func allConfigKeys() []string {
 		keyDBType,
 		keyDBAddress,
 		keyDBToken,
+		keyDBCollectionName,
 		keyEmbeddingOllama,
 		keyEmbeddingModel,
 		keyEmbeddingMaxInput,

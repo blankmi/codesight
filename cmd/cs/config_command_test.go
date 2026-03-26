@@ -25,6 +25,7 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 	entries := parseConfigOutput(t, stdout)
 	want := map[string]configOutputEntry{
 		"db.address":                {Value: "localhost:19530", Source: "default"},
+		"db.collection_name":        {Value: "", Source: "default"},
 		"db.token":                  {Value: "", Source: "default"},
 		"db.type":                   {Value: "milvus", Source: "default"},
 		"embedding.max_input_chars": {Value: "0", Source: "default"},
@@ -61,6 +62,9 @@ func TestConfig_WithProjectConfig(t *testing.T) {
 
 	projectDir := t.TempDir()
 	writeTestFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+[db]
+collection_name = "shared_collection"
+
 [embedding]
 model = "project-model"
 
@@ -74,6 +78,9 @@ idle_timeout = "25s"
 	}
 
 	entries := parseConfigOutput(t, stdout)
+	if got := entries["db.collection_name"]; got.Value != "shared_collection" || got.Source != ".codesight/config.toml" {
+		t.Fatalf("db.collection_name = %#v, want value shared_collection with source .codesight/config.toml", got)
+	}
 	if got := entries["embedding.model"]; got.Value != "project-model" || got.Source != ".codesight/config.toml" {
 		t.Fatalf("embedding.model = %#v, want value project-model with source .codesight/config.toml", got)
 	}
@@ -88,6 +95,7 @@ idle_timeout = "25s"
 func TestConfig_WithEnvOverride(t *testing.T) {
 	setTestHome(t)
 	clearTestEnv(t)
+	t.Setenv("CODESIGHT_DB_COLLECTION_NAME", "env-shared")
 	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model")
 	t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "40s")
 
@@ -99,6 +107,9 @@ func TestConfig_WithEnvOverride(t *testing.T) {
 	}
 
 	entries := parseConfigOutput(t, stdout)
+	if got := entries["db.collection_name"]; got.Value != "env-shared" || got.Source != "CODESIGHT_DB_COLLECTION_NAME" {
+		t.Fatalf("db.collection_name = %#v, want value env-shared with source CODESIGHT_DB_COLLECTION_NAME", got)
+	}
 	if got := entries["embedding.model"]; got.Value != "env-model" || got.Source != "CODESIGHT_EMBEDDING_MODEL" {
 		t.Fatalf("embedding.model = %#v, want value env-model with source CODESIGHT_EMBEDDING_MODEL", got)
 	}

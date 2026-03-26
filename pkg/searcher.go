@@ -15,10 +15,11 @@ import (
 
 // SearchOptions configures a search query.
 type SearchOptions struct {
-	Path       string
-	Query      string
-	Limit      int
-	Extensions []string // e.g., [".go", ".ts"]
+	Path           string
+	CollectionName string
+	Query          string
+	Limit          int
+	Extensions     []string // e.g., [".go", ".ts"]
 }
 
 // SearchOutput is a formatted search result for display.
@@ -55,7 +56,7 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) (*SearchOutpu
 		return nil, fmt.Errorf("loading ignore rules: %w", err)
 	}
 
-	collection := CollectionName(projectPath)
+	collection := ResolveCollectionName(projectPath, opts.CollectionName)
 	exists, err := s.Store.CollectionExists(ctx, collection)
 	if err != nil {
 		return nil, fmt.Errorf("checking collection: %w", err)

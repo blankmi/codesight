@@ -27,6 +27,23 @@ func TestCollectionName_Prefix(t *testing.T) {
 	}
 }
 
+func TestResolveCollectionName_OverrideWins(t *testing.T) {
+	got := ResolveCollectionName("/some/path", "shared_worktree_index")
+	if got != "shared_worktree_index" {
+		t.Fatalf("ResolveCollectionName() = %q, want %q", got, "shared_worktree_index")
+	}
+}
+
+func TestResolveCollectionName_EmptyOverrideFallsBack(t *testing.T) {
+	want := CollectionName("/some/path")
+
+	for _, override := range []string{"", "   "} {
+		if got := ResolveCollectionName("/some/path", override); got != want {
+			t.Fatalf("ResolveCollectionName(%q) = %q, want %q", override, got, want)
+		}
+	}
+}
+
 func TestIsStale(t *testing.T) {
 	tests := []struct {
 		name              string

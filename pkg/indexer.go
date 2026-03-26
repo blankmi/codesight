@@ -17,11 +17,12 @@ const embeddingBatchSize = 64
 
 // IndexOptions configures the indexing pipeline.
 type IndexOptions struct {
-	Path      string
-	Branch    string
-	CommitSHA string
-	Force     bool
-	Walk      *WalkOptions
+	Path           string
+	CollectionName string
+	Branch         string
+	CommitSHA      string
+	Force          bool
+	Walk           *WalkOptions
 }
 
 // Indexer orchestrates the code indexing pipeline.
@@ -39,7 +40,7 @@ func (idx *Indexer) Index(ctx context.Context, opts IndexOptions) error {
 		return fmt.Errorf("resolving path: %w", err)
 	}
 
-	collection := CollectionName(projectPath)
+	collection := ResolveCollectionName(projectPath, opts.CollectionName)
 	matcher, err := matcherForWalk(projectPath, opts.Walk)
 	if err != nil {
 		return fmt.Errorf("loading ignore rules: %w", err)

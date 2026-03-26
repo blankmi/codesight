@@ -9,7 +9,9 @@ import (
 )
 
 type stubSearchStore struct {
-	results []vectorstore.SearchResult
+	results          []vectorstore.SearchResult
+	lastCollection   string
+	collectionExists bool
 }
 
 func (s *stubSearchStore) Connect(context.Context) error {
@@ -29,6 +31,9 @@ func (s *stubSearchStore) DropCollection(context.Context, string) error {
 }
 
 func (s *stubSearchStore) CollectionExists(context.Context, string) (bool, error) {
+	if !s.collectionExists {
+		return false, nil
+	}
 	return true, nil
 }
 
@@ -36,7 +41,8 @@ func (s *stubSearchStore) Insert(context.Context, string, []vectorstore.Document
 	return nil
 }
 
-func (s *stubSearchStore) Search(context.Context, string, []float32, int, map[string]string) ([]vectorstore.SearchResult, error) {
+func (s *stubSearchStore) Search(_ context.Context, collection string, _ []float32, _ int, _ map[string]string) ([]vectorstore.SearchResult, error) {
+	s.lastCollection = collection
 	return append([]vectorstore.SearchResult(nil), s.results...), nil
 }
 
@@ -72,6 +78,7 @@ func TestSearcherFiltersIgnoredResults(t *testing.T) {
 
 	searcher := &Searcher{
 		Store: &stubSearchStore{
+			collectionExists: true,
 			results: []vectorstore.SearchResult{
 				{
 					Document: vectorstore.Document{
@@ -116,5 +123,49 @@ func TestSearcherFiltersIgnoredResults(t *testing.T) {
 	}
 	if output.Results[0].Rank != 1 {
 		t.Fatalf("rank = %d, want 1", output.Results[0].Rank)
+	}
+}
+
+func TestSearcherUsesConfiguredCollectionName(t *testing.T) {
+	root := t.TempDir()
+	store := &stubSearchStore{collectionExists: true}
+	searcher := &Searcher{
+		Store:    store,
+		Embedder: stubEmbedder{},
+	}
+
+	if _, err := searcher.Search(context.Background(), SearchOptions{
+		Path:           root,
+		CollectionName: "shared_collection",
+		Query:          "visible function",
+		Limit:          10,
+	}); err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	if store.lastCollection != "shared_collection" {
+		t.Fatalf("collection = %q, want %q", store.lastCollection, "shared_collection")
+	}
+}
+
+func TestSearcherUsesPathBasedCollectionNameByDefault(t *testing.T) {
+	root := t.TempDir()
+	store := &stubSearchStore{collectionExists: true}
+	searcher := &Searcher{
+		Store:    store,
+		Embedder: stubEmbedder{},
+	}
+
+	if _, err := searcher.Search(context.Background(), SearchOptions{
+		Path:  root,
+		Query: "visible function",
+		Limit: 10,
+	}); err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	want := CollectionName(root)
+	if store.lastCollection != want {
+		t.Fatalf("collection = %q, want %q", store.lastCollection, want)
 	}
 }

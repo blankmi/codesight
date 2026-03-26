@@ -540,10 +540,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 
 	return idx.Index(ctx, pkg.IndexOptions{
-		Path:      path,
-		Branch:    flagBranch,
-		CommitSHA: commit,
-		Force:     flagForce,
+		Path:           path,
+		CollectionName: cfg.DB.CollectionName,
+		Branch:         flagBranch,
+		CommitSHA:      commit,
+		Force:          flagForce,
 	})
 }
 
@@ -593,10 +594,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if err := runWithTimeout(interactiveSearchTimeout, "running search", func(ctx context.Context) error {
 		var err error
 		output, err = searcher.Search(ctx, pkg.SearchOptions{
-			Path:       searchPath,
-			Query:      query,
-			Limit:      flagLimit,
-			Extensions: extensions,
+			Path:           searchPath,
+			CollectionName: cfg.DB.CollectionName,
+			Query:          query,
+			Limit:          flagLimit,
+			Extensions:     extensions,
 		})
 		return err
 	}); err != nil {
@@ -1090,7 +1092,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving path: %w", err)
 	}
 
-	collection := pkg.CollectionName(absPath)
+	collection := pkg.ResolveCollectionName(absPath, cfg.DB.CollectionName)
 	var exists bool
 	if err := runWithTimeout(interactiveNetworkTimeout, "checking index status", func(ctx context.Context) error {
 		var err error
@@ -1163,7 +1165,7 @@ func runClear(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving path: %w", err)
 	}
 
-	collection := pkg.CollectionName(absPath)
+	collection := pkg.ResolveCollectionName(absPath, cfg.DB.CollectionName)
 	var exists bool
 	if err := runWithTimeout(interactiveNetworkTimeout, "checking whether an index exists", func(ctx context.Context) error {
 		var err error
