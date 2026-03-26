@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -187,7 +186,7 @@ func findSymbolInFile(path string, symbol string) (SymbolMatch, error) {
 		return SymbolMatch{}, fmt.Errorf("set language: %w", err)
 	}
 
-	tree := parser.ParseCtx(context.Background(), source, nil)
+	tree := parseSource(parser, source)
 	if tree == nil {
 		return SymbolMatch{}, fmt.Errorf("parse %s: parser returned nil tree", filepath.ToSlash(path))
 	}
@@ -208,6 +207,15 @@ func findSymbolInFile(path string, symbol string) (SymbolMatch, error) {
 		EndByte:    int(node.EndByte()),
 		SymbolType: symbolType,
 	}, nil
+}
+
+func parseSource(parser *sitter.Parser, source []byte) *sitter.Tree {
+	return parser.ParseWithOptions(func(offset int, _ sitter.Point) []byte {
+		if offset >= len(source) {
+			return []byte{}
+		}
+		return source[offset:]
+	}, nil, nil)
 }
 
 func languageForPath(path string) (string, error) {

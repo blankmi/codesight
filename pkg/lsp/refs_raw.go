@@ -51,7 +51,7 @@ func (e *RefsEngine) FindReferencesRaw(ctx context.Context, opts RefsOptions) ([
 
 	raw := make([]RawReference, 0, len(fallbackMatches))
 	for _, m := range fallbackMatches {
-		raw = append(raw, RawReference{Path: m.Path, Line: m.Line, Snippet: m.Snippet})
+		raw = append(raw, RawReference(m))
 	}
 	return raw, "grep", nil
 }
@@ -113,7 +113,7 @@ func (e *RefsEngine) findRefsRawLSP(
 
 	raw := make([]RawReference, 0, len(refLines))
 	for _, r := range refLines {
-		raw = append(raw, RawReference{Path: r.Path, Line: r.Line, Snippet: r.Snippet})
+		raw = append(raw, RawReference(r))
 	}
 	return raw, nil
 }

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"strings"
 
 	"github.com/blankbytes/codesight/pkg/splitter"
@@ -106,13 +105,22 @@ func findSalientSlices(source []byte, language string, startLine, endLine int) [
 		return findSalientSlicesByText(source, startLine, endLine)
 	}
 
-	tree := parser.ParseCtx(context.Background(), source, nil)
+	tree := parseSource(parser, source)
 	if tree == nil {
 		return findSalientSlicesByText(source, startLine, endLine)
 	}
 	defer tree.Close()
 
 	return findErrorAndIOSlices(tree.RootNode(), source, startLine, endLine)
+}
+
+func parseSource(parser *sitter.Parser, source []byte) *sitter.Tree {
+	return parser.ParseWithOptions(func(offset int, _ sitter.Point) []byte {
+		if offset >= len(source) {
+			return []byte{}
+		}
+		return source[offset:]
+	}, nil, nil)
 }
 
 func findErrorAndIOSlices(root *sitter.Node, source []byte, startLine, endLine int) []CodeSlice {

@@ -372,13 +372,6 @@ func isTransientConnectError(err error) bool {
 		strings.Contains(message, "missing Content-Length header")
 }
 
-func isDaemonBusyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), daemonBusyMessage)
-}
-
 func defaultDaemonConnectorDialSocket(ctx context.Context, socketPath string) (io.ReadWriteCloser, error) {
 	trimmed := strings.TrimSpace(socketPath)
 	if trimmed == "" {

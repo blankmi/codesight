@@ -93,11 +93,7 @@ func (e *ImplementsEngine) FindImplementationsRaw(ctx context.Context, opts Impl
 
 	raw := make([]RawImplementation, 0, len(implementations))
 	for _, impl := range implementations {
-		raw = append(raw, RawImplementation{
-			Name: impl.Name,
-			Path: impl.Path,
-			Line: impl.Line,
-		})
+		raw = append(raw, RawImplementation(impl))
 	}
 	return raw, nil
 }

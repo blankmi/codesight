@@ -1,7 +1,6 @@
 package splitter
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -66,7 +65,7 @@ func (t *TreeSitterSplitter) Split(code string, language string, filePath string
 		return t.fallback.Split(code, language, filePath)
 	}
 
-	tree := parser.ParseCtx(context.Background(), []byte(code), nil)
+	tree := parseCode(parser, code)
 	if tree == nil {
 		return t.fallback.Split(code, language, filePath)
 	}
@@ -100,6 +99,16 @@ func (t *TreeSitterSplitter) Split(code string, language string, filePath string
 	}
 
 	return result, nil
+}
+
+func parseCode(parser *sitter.Parser, code string) *sitter.Tree {
+	source := []byte(code)
+	return parser.ParseWithOptions(func(offset int, _ sitter.Point) []byte {
+		if offset >= len(source) {
+			return []byte{}
+		}
+		return source[offset:]
+	}, nil, nil)
 }
 
 func (t *TreeSitterSplitter) walkNode(node *sitter.Node, code string, lines []string, filePath string, language string, nodeTypes map[string]string, chunks *[]Chunk) {

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"sort"
 	"strings"
 	"unicode"
@@ -11,9 +10,9 @@ import (
 )
 
 const (
-	maxOutlineEntries     = 12
+	maxOutlineEntries      = 12
 	outlineMethodThreshold = 160 // body lines above which we expand top methods
-	maxTopMethods         = 4
+	maxTopMethods          = 4
 )
 
 // classLikeTypes are symbol types that should get outline rendering.
@@ -72,7 +71,7 @@ func OutlineClassDefinition(source []byte, language, symbolName string, startLin
 		return sig, nil, nil, ""
 	}
 
-	tree := parser.ParseCtx(context.Background(), source, nil)
+	tree := parseSource(parser, source)
 	if tree == nil {
 		return sig, nil, nil, ""
 	}
