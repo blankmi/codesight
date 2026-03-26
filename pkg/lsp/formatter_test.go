@@ -13,8 +13,10 @@ func TestFormatterReferencesOutputContract(t *testing.T) {
 
 	output := formatReferencesOutput(references, "")
 	want := strings.Join([]string{
-		"alpha.go:3  ->  target()",
-		"zeta.go:7  ->  target()",
+		"alpha.go (1 ref)",
+		"  :3  target()",
+		"zeta.go (1 ref)",
+		"  :7  target()",
 		"2 references found",
 	}, "\n")
 
@@ -31,12 +33,36 @@ func TestFormatterReferencesOutputIncludesFallbackNote(t *testing.T) {
 	output := formatReferencesOutput(references, "(grep-based - install gopls for precise results)")
 	want := strings.Join([]string{
 		"(grep-based - install gopls for precise results)",
-		"alpha.go:2  ->  target()",
+		"alpha.go (1 ref)",
+		"  :2  target()",
 		"1 references found",
 	}, "\n")
 
 	if output != want {
 		t.Fatalf("formatted fallback output mismatch\n got: %q\nwant: %q", output, want)
+	}
+}
+
+func TestFormatterReferencesOutputDropsImportLinesAndGroupsByFile(t *testing.T) {
+	references := []referenceLine{
+		{Path: "alpha.go", Line: 2, Snippet: "import target/pkg"},
+		{Path: "alpha.go", Line: 8, Snippet: " target()"},
+		{Path: "alpha.go", Line: 12, Snippet: "\ttarget(value)"},
+		{Path: "bravo.go", Line: 4, Snippet: "target()"},
+	}
+
+	output := formatReferencesOutput(references, "")
+	want := strings.Join([]string{
+		"alpha.go (2 refs)",
+		"  :8  target()",
+		"  :12  target(value)",
+		"bravo.go (1 ref)",
+		"  :4  target()",
+		"3 references found",
+	}, "\n")
+
+	if output != want {
+		t.Fatalf("formatted grouped output mismatch\n got: %q\nwant: %q", output, want)
 	}
 }
 

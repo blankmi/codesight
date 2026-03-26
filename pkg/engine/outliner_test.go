@@ -433,7 +433,7 @@ func TestRenderMarkdownOutline(t *testing.T) {
 		},
 	}
 
-	md := RenderMarkdown(result)
+	md := RenderMarkdown(result, false)
 
 	checks := []string{
 		"# Symbol: `UserService`",
@@ -465,7 +465,7 @@ func TestQuerySymbol_ClassOutline(t *testing.T) {
 	eng := &Engine{
 		WorkspaceRoot: t.TempDir(),
 		Extractor: &mockExtractor{
-			def: &SymDefinition{
+			defs: []*SymDefinition{{
 				File:         "test.py",
 				Line:         1,
 				EndLine:      101,
@@ -474,7 +474,7 @@ func TestQuerySymbol_ClassOutline(t *testing.T) {
 				Body:         body.String(),
 				ViewStrategy: "full_body",
 				Language:     "python",
-			},
+			}},
 		},
 	}
 
@@ -502,7 +502,7 @@ func TestQuerySymbol_FunctionStaysSlices(t *testing.T) {
 	eng := &Engine{
 		WorkspaceRoot: t.TempDir(),
 		Extractor: &mockExtractor{
-			def: &SymDefinition{
+			defs: []*SymDefinition{{
 				File:         "test.go",
 				Line:         1,
 				EndLine:      102,
@@ -511,7 +511,7 @@ func TestQuerySymbol_FunctionStaysSlices(t *testing.T) {
 				Body:         body.String(),
 				ViewStrategy: "full_body",
 				Language:     "go",
-			},
+			}},
 		},
 	}
 

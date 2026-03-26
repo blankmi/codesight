@@ -2,16 +2,17 @@ package engine
 
 // SymbolIntelligence is the top-level result of a unified query.
 type SymbolIntelligence struct {
-	Query           string
-	Mode            string // auto|symbol|text|ast|path
-	Status          string // ok|ambiguous|not_found|not_found_exact|file_too_large
-	Symbol          string
-	Definition      *SymDefinition
-	Ambiguous       []SymCandidate
-	References      []SymReference
-	Callers         []SymCaller
-	Implementations []SymImpl
-	Meta            SymMeta
+	Query            string
+	Mode             string // auto|symbol|text|ast|path
+	Status           string // ok|ambiguous|not_found|not_found_exact|file_too_large
+	Symbol           string
+	Definition       *SymDefinition
+	OtherDefinitions []SymDefinitionRef
+	Ambiguous        []SymCandidate
+	References       []SymReference
+	Callers          []SymCaller
+	Implementations  []SymImpl
+	Meta             SymMeta
 }
 
 // SymDefinition describes the resolved definition of a symbol.
@@ -27,6 +28,14 @@ type SymDefinition struct {
 	Outline      []OutlineEntry // member outline for class-like symbols
 	ViewStrategy string         // full_body | signature_plus_slices | signature_plus_outline
 	Language     string
+}
+
+// SymDefinitionRef is a compact reference to an alternate exact definition.
+type SymDefinitionRef struct {
+	File    string
+	Line    int
+	EndLine int
+	Type    string
 }
 
 // OutlineEntry describes a member of a class-like symbol.

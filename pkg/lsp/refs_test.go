@@ -132,8 +132,10 @@ func TestRefsLSPHappyPath(t *testing.T) {
 	}
 
 	want := strings.Join([]string{
-		"alpha.go:6  ->  _ = target()",
-		"bravo.go:4  ->  _ = target()",
+		"alpha.go (1 ref)",
+		"  :6  _ = target()",
+		"bravo.go (1 ref)",
+		"  :4  _ = target()",
 		"2 references found",
 	}, "\n")
 	if output != want {
@@ -222,7 +224,8 @@ func TestRefsLSPRespectsCsignore(t *testing.T) {
 	}
 
 	want := strings.Join([]string{
-		"use.go:4  ->  Target()",
+		"use.go (1 ref)",
+		"  :4  Target()",
 		"1 references found",
 	}, "\n")
 	if output != want {
@@ -328,7 +331,8 @@ func TestRefsKindFilterIncludeExclude(t *testing.T) {
 		t.Fatalf("Find with function kind returned error: %v", err)
 	}
 	wantIncluded := strings.Join([]string{
-		"use.go:2  ->  _ = Target{}",
+		"use.go (1 ref)",
+		"  :2  _ = Target{}",
 		"1 references found",
 	}, "\n")
 	if includedOutput != wantIncluded {
@@ -497,9 +501,11 @@ func TestRefsFallbackToGrepIncludesPrecisionNote(t *testing.T) {
 
 	want := strings.Join([]string{
 		"(grep-based - install gopls for precise results)",
-		"alpha.go:4  ->  _ = target()",
-		"alpha.go:5  ->  _ = target()",
-		"zeta.go:4  ->  _ = target()",
+		"alpha.go (2 refs)",
+		"  :4  _ = target()",
+		"  :5  _ = target()",
+		"zeta.go (1 ref)",
+		"  :4  _ = target()",
 		"3 references found",
 	}, "\n")
 	if output != want {
@@ -544,7 +550,8 @@ func TestRefsFallbackRespectsCsignore(t *testing.T) {
 
 	want := strings.Join([]string{
 		"(grep-based - install gopls for precise results)",
-		"visible.go:4  ->  _ = target()",
+		"visible.go (1 ref)",
+		"  :4  _ = target()",
 		"1 references found",
 	}, "\n")
 	if output != want {

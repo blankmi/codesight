@@ -37,7 +37,7 @@ func TestRefsCommandPassesThroughOutputAndNormalizedInputs(t *testing.T) {
 	var got refsCommandOptions
 	restoreRunRefsCommand(t, func(_ context.Context, opts refsCommandOptions) (string, error) {
 		got = opts
-		return "pkg/main.go:10  ->  Target()\n1 references found", nil
+		return "pkg/main.go (1 ref)\n  :10  Target()\n1 references found", nil
 	})
 
 	tempDir := t.TempDir()
@@ -55,7 +55,7 @@ func TestRefsCommandPassesThroughOutputAndNormalizedInputs(t *testing.T) {
 		t.Fatalf("refs command returned error: %v", err)
 	}
 
-	if stdout != "pkg/main.go:10  ->  Target()\n1 references found" {
+	if stdout != "pkg/main.go (1 ref)\n  :10  Target()\n1 references found" {
 		t.Fatalf("unexpected output: %q", stdout)
 	}
 	if got.Symbol != "Target" {
@@ -95,7 +95,7 @@ func TestRefsCommandDefaultsPathToWorkingDirectory(t *testing.T) {
 	var got refsCommandOptions
 	restoreRunRefsCommand(t, func(_ context.Context, opts refsCommandOptions) (string, error) {
 		got = opts
-		return "pkg/main.go:10  ->  Target()\n1 references found", nil
+		return "pkg/main.go (1 ref)\n  :10  Target()\n1 references found", nil
 	})
 
 	if _, _, err := executeRefsRootCommand(t, "refs", "Target"); err != nil {
@@ -149,7 +149,7 @@ func TestRefsCommandAmbiguousErrorPassThrough(t *testing.T) {
 
 func TestRefsCommandFallbackOutputIncludesGrepNote(t *testing.T) {
 	restoreRunRefsCommand(t, func(_ context.Context, _ refsCommandOptions) (string, error) {
-		return "(grep-based - install gopls for precise results)\nmain.go:2  ->  Target()\n1 references found", nil
+		return "(grep-based - install gopls for precise results)\nmain.go (1 ref)\n  :2  Target()\n1 references found", nil
 	})
 
 	stdout, _, err := executeRefsRootCommand(t, "refs", "Target")
@@ -237,7 +237,7 @@ func TestExecuteRefsCommandUsesLSPOutputWhenServerAvailable(t *testing.T) {
 	if strings.Contains(output, "(grep-based - install") {
 		t.Fatalf("output unexpectedly contains fallback note: %q", output)
 	}
-	if !strings.Contains(output, "main.go:4  ->  Target()") {
+	if !strings.Contains(output, "main.go (1 ref)\n  :4  Target()") {
 		t.Fatalf("output missing LSP-derived reference line: %q", output)
 	}
 	if !strings.Contains(output, "1 references found") {
@@ -326,7 +326,7 @@ func TestExecuteRefsCommandReusesDaemonBetweenInvocations(t *testing.T) {
 		if strings.Contains(output, "(grep-based - install") {
 			t.Fatalf("refs output unexpectedly used grep fallback: %q", output)
 		}
-		if !strings.Contains(output, "main.go:4  ->  Target()") {
+		if !strings.Contains(output, "main.go (1 ref)\n  :4  Target()") {
 			t.Fatalf("refs output missing LSP-derived reference line: %q", output)
 		}
 		if !strings.Contains(output, "1 references found") {

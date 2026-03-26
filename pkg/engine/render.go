@@ -6,7 +6,7 @@ import (
 )
 
 // RenderMarkdown converts a SymbolIntelligence result into LLM-facing Markdown.
-func RenderMarkdown(result *SymbolIntelligence) string {
+func RenderMarkdown(result *SymbolIntelligence, verbose bool) string {
 	if result == nil {
 		return ""
 	}
@@ -15,13 +15,13 @@ func RenderMarkdown(result *SymbolIntelligence) string {
 	case "file_too_large":
 		return renderFileTooLarge(result)
 	case "not_found_exact", "not_found":
-		return renderNotFound(result)
+		return renderNotFound(result, verbose)
 	default:
-		return renderOK(result)
+		return renderOK(result, verbose)
 	}
 }
 
-func renderOK(r *SymbolIntelligence) string {
+func renderOK(r *SymbolIntelligence, verbose bool) string {
 	var b strings.Builder
 
 	title := r.Symbol
@@ -35,17 +35,29 @@ func renderOK(r *SymbolIntelligence) string {
 	if r.Definition != nil {
 		fmt.Fprintf(&b, "- kind: `%s`\n", r.Definition.Type)
 		fmt.Fprintf(&b, "- file: `%s`\n", r.Definition.File)
-		fmt.Fprintf(&b, "- view: `%s`\n", r.Definition.ViewStrategy)
+		if verbose {
+			fmt.Fprintf(&b, "- view: `%s`\n", r.Definition.ViewStrategy)
+		}
 	}
-	fmt.Fprintf(&b, "- confidence: `%.2f`\n", r.Meta.Confidence)
-	fmt.Fprintf(&b, "- budget: `%d lines total / %d used`\n",
-		r.Meta.Budget.TotalLines,
-		estimateUsedLines(r))
+	if verbose {
+		fmt.Fprintf(&b, "- confidence: `%.2f`\n", r.Meta.Confidence)
+		fmt.Fprintf(&b, "- budget: `%d lines total / %d used`\n",
+			r.Meta.Budget.TotalLines,
+			estimateUsedLines(r))
+	}
 	b.WriteByte('\n')
 
 	// Definition.
 	if r.Definition != nil {
 		renderDefinition(&b, r.Definition)
+	}
+
+	if len(r.OtherDefinitions) > 0 {
+		fmt.Fprintf(&b, "## Other Definitions (%d)\n", len(r.OtherDefinitions))
+		for _, other := range r.OtherDefinitions {
+			fmt.Fprintf(&b, "- `%s` (`%s`, lines %d-%d)\n", other.File, other.Type, other.Line, other.EndLine)
+		}
+		b.WriteByte('\n')
 	}
 
 	// References.
@@ -78,7 +90,7 @@ func renderOK(r *SymbolIntelligence) string {
 	}
 
 	// Meta.
-	renderMeta(&b, &r.Meta)
+	renderMeta(&b, &r.Meta, verbose)
 
 	return b.String()
 }
@@ -89,9 +101,9 @@ func renderDefinition(b *strings.Builder, def *SymDefinition) {
 		lang = ""
 	}
 
-	fmt.Fprintf(b, "## Definition (`%s`, lines %d-%d)\n", def.File, def.Line, def.EndLine)
+	fmt.Fprintf(b, "## Definition (lines %d-%d)\n", def.Line, def.EndLine)
 
-	if def.Signature != "" {
+	if def.Signature != "" && def.ViewStrategy != "full_body" {
 		fmt.Fprintf(b, "```%s\n%s\n```\n\n", lang, def.Signature)
 	}
 
@@ -161,7 +173,7 @@ func renderOutline(b *strings.Builder, def *SymDefinition, lang string) {
 	}
 }
 
-func renderNotFound(r *SymbolIntelligence) string {
+func renderNotFound(r *SymbolIntelligence, verbose bool) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# No Exact Symbol: `%s`\n", r.Query)
@@ -184,7 +196,7 @@ func renderNotFound(r *SymbolIntelligence) string {
 		b.WriteByte('\n')
 	}
 
-	renderMeta(&b, &r.Meta)
+	renderMeta(&b, &r.Meta, verbose)
 
 	return b.String()
 }
@@ -202,9 +214,20 @@ func renderFileTooLarge(r *SymbolIntelligence) string {
 	return b.String()
 }
 
-func renderMeta(b *strings.Builder, meta *SymMeta) {
+func renderMeta(b *strings.Builder, meta *SymMeta, verbose bool) {
+	if meta == nil {
+		return
+	}
+
+	hasContent := verbose || meta.NextHint != "" || len(meta.Errors) > 0
+	if !hasContent {
+		return
+	}
+
 	b.WriteString("## Meta\n")
-	fmt.Fprintf(b, "- `search_chain`: `%s`\n", strings.Join(meta.SearchChain, " -> "))
+	if verbose {
+		fmt.Fprintf(b, "- `search_chain`: `%s`\n", strings.Join(meta.SearchChain, " -> "))
+	}
 	if meta.NextHint != "" {
 		fmt.Fprintf(b, "- `next_hint`: `%s`\n", meta.NextHint)
 	}

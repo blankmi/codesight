@@ -22,21 +22,25 @@ type symbolCandidate struct {
 }
 
 func formatReferencesOutput(references []referenceLine, fallbackNote string) string {
-	sorted := dedupeAndSortReferences(references)
+	groupedRefs, refCount := compactReferences(references)
 
-	lines := make([]string, 0, len(sorted)+2)
+	lines := make([]string, 0, refCount+2)
 	if fallbackNote != "" {
 		lines = append(lines, fallbackNote)
 	}
 
-	for _, ref := range sorted {
-		lines = append(
-			lines,
-			fmt.Sprintf("%s:%d  ->  %s", ref.Path, ref.Line, normalizeSnippet(ref.Snippet)),
-		)
+	for _, group := range groupedRefs {
+		label := "refs"
+		if len(group.Refs) == 1 {
+			label = "ref"
+		}
+		lines = append(lines, fmt.Sprintf("%s (%d %s)", group.Path, len(group.Refs), label))
+		for _, ref := range group.Refs {
+			lines = append(lines, fmt.Sprintf("  :%d  %s", ref.Line, normalizeSnippet(ref.Snippet)))
+		}
 	}
 
-	lines = append(lines, fmt.Sprintf("%d references found", len(sorted)))
+	lines = append(lines, fmt.Sprintf("%d references found", refCount))
 	return strings.Join(lines, "\n")
 }
 
@@ -103,4 +107,37 @@ func dedupeAndSortReferences(references []referenceLine) []referenceLine {
 
 func normalizeSnippet(snippet string) string {
 	return strings.TrimSpace(snippet)
+}
+
+type referenceGroup struct {
+	Path string
+	Refs []referenceLine
+}
+
+func compactReferences(references []referenceLine) ([]referenceGroup, int) {
+	sorted := dedupeAndSortReferences(references)
+	groups := make([]referenceGroup, 0)
+	total := 0
+
+	for _, ref := range sorted {
+		if isImportReference(ref.Snippet) {
+			continue
+		}
+		total++
+
+		if len(groups) == 0 || groups[len(groups)-1].Path != ref.Path {
+			groups = append(groups, referenceGroup{
+				Path: ref.Path,
+				Refs: []referenceLine{ref},
+			})
+			continue
+		}
+		groups[len(groups)-1].Refs = append(groups[len(groups)-1].Refs, ref)
+	}
+
+	return groups, total
+}
+
+func isImportReference(snippet string) bool {
+	return strings.HasPrefix(normalizeSnippet(snippet), "import ")
 }

@@ -140,6 +140,5 @@ func executeQueryCommand(ctx context.Context, opts queryCommandOptions) (string,
 		return "", err
 	}
 
-	return engine.RenderMarkdown(result), nil
+	return engine.RenderMarkdown(result, flagVerbose), nil
 }
-

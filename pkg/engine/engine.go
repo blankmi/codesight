@@ -24,7 +24,7 @@ type ImplProvider interface {
 
 // ExtractProvider resolves a symbol definition.
 type ExtractProvider interface {
-	Extract(workspaceRoot, symbol string) (*SymDefinition, error)
+	Extract(workspaceRoot, symbol string) ([]*SymDefinition, error)
 }
 
 // SearchProvider performs semantic search over indexed code.
@@ -93,10 +93,12 @@ func (e *Engine) querySymbol(ctx context.Context, result *SymbolIntelligence, fi
 
 	// Step 1: Extract definition.
 	var def *SymDefinition
+	var allDefs []*SymDefinition
 	if e.Extractor != nil {
-		d, err := e.Extractor.Extract(e.WorkspaceRoot, symbol)
-		if err == nil && d != nil {
-			def = d
+		defs, err := e.Extractor.Extract(e.WorkspaceRoot, symbol)
+		if err == nil && len(defs) > 0 {
+			allDefs = defs
+			def = defs[0]
 		}
 	}
 
@@ -154,6 +156,20 @@ func (e *Engine) querySymbol(ctx context.Context, result *SymbolIntelligence, fi
 		}
 	}
 	result.Definition = def
+	if len(allDefs) > 1 {
+		result.OtherDefinitions = make([]SymDefinitionRef, 0, len(allDefs)-1)
+		for _, other := range allDefs[1:] {
+			if other == nil {
+				continue
+			}
+			result.OtherDefinitions = append(result.OtherDefinitions, SymDefinitionRef{
+				File:    other.File,
+				Line:    other.Line,
+				EndLine: other.EndLine,
+				Type:    other.Type,
+			})
+		}
+	}
 
 	// Step 2: Parallel fetch of refs, callers, implements.
 	type refsResult struct {

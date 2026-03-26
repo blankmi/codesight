@@ -10,12 +10,12 @@ import (
 // Mock providers for testing.
 
 type mockExtractor struct {
-	def *SymDefinition
-	err error
+	defs []*SymDefinition
+	err  error
 }
 
-func (m *mockExtractor) Extract(workspaceRoot, symbol string) (*SymDefinition, error) {
-	return m.def, m.err
+func (m *mockExtractor) Extract(workspaceRoot, symbol string) ([]*SymDefinition, error) {
+	return m.defs, m.err
 }
 
 type mockRefsProvider struct {
@@ -177,10 +177,10 @@ func TestQuerySymbolConfidence(t *testing.T) {
 	eng := &Engine{
 		WorkspaceRoot: "/workspace",
 		Extractor: &mockExtractor{
-			def: &SymDefinition{
+			defs: []*SymDefinition{{
 				File: "pkg/auth.go", Line: 10, EndLine: 20,
 				Type: "function", Language: "go", Body: "func F() {}",
-			},
+			}},
 		},
 		Refs:    &mockRefsProvider{source: "lsp"},
 		Callers: &mockCallersProvider{},
@@ -253,14 +253,14 @@ func TestQuerySymbolSuccess(t *testing.T) {
 	eng := &Engine{
 		WorkspaceRoot: "/workspace",
 		Extractor: &mockExtractor{
-			def: &SymDefinition{
+			defs: []*SymDefinition{{
 				File:     "pkg/auth.go",
 				Line:     10,
 				EndLine:  20,
 				Type:     "function",
 				Language: "go",
 				Body:     "func Authenticate() {}",
-			},
+			}},
 		},
 		Refs: &mockRefsProvider{
 			refs: []SymReference{
@@ -330,14 +330,14 @@ func TestQueryPartialResults(t *testing.T) {
 	eng := &Engine{
 		WorkspaceRoot: "/workspace",
 		Extractor: &mockExtractor{
-			def: &SymDefinition{
+			defs: []*SymDefinition{{
 				File:     "pkg/auth.go",
 				Line:     1,
 				EndLine:  5,
 				Type:     "function",
 				Language: "go",
 				Body:     "func F() {}",
-			},
+			}},
 		},
 		Refs: &mockRefsProvider{
 			refs: []SymReference{
@@ -403,7 +403,7 @@ func TestRenderMarkdownSymbol(t *testing.T) {
 		},
 	}
 
-	md := RenderMarkdown(result)
+	md := RenderMarkdown(result, false)
 
 	checks := []string{
 		"# Symbol: `Authenticate`",
@@ -411,13 +411,20 @@ func TestRenderMarkdownSymbol(t *testing.T) {
 		"## Definition",
 		"## References",
 		"## Callers",
-		"## Meta",
-		"`search_chain`: `symbol`",
 	}
 	for _, check := range checks {
 		if !strings.Contains(md, check) {
 			t.Errorf("missing %q in rendered markdown", check)
 		}
+	}
+	if strings.Contains(md, "## Meta") {
+		t.Errorf("default render should omit meta without actionable fields: %s", md)
+	}
+	if strings.Contains(md, result.Definition.Signature+"\n```\n\n```go\n"+result.Definition.Body) {
+		t.Errorf("full_body render should not duplicate signature block: %s", md)
+	}
+	if !strings.Contains(md, "## Definition (lines 42-103)") {
+		t.Errorf("definition header should show lines only: %s", md)
 	}
 }
 
@@ -434,7 +441,7 @@ func TestRenderMarkdownNotFound(t *testing.T) {
 		},
 	}
 
-	md := RenderMarkdown(result)
+	md := RenderMarkdown(result, false)
 
 	if !strings.Contains(md, "# No Exact Symbol: `Foo`") {
 		t.Error("missing not-found header")
@@ -470,12 +477,86 @@ func TestRenderMarkdownSlices(t *testing.T) {
 		},
 	}
 
-	md := RenderMarkdown(result)
+	md := RenderMarkdown(result, false)
 
 	if !strings.Contains(md, "### Header slice") {
 		t.Error("missing Header slice")
 	}
 	if !strings.Contains(md, "### I/O site slice") {
 		t.Error("missing I/O site slice")
+	}
+	if !strings.Contains(md, "func LongFunction() {") {
+		t.Error("sliced render should retain signature block")
+	}
+}
+
+func TestQuerySymbolKeepsOtherDefinitions(t *testing.T) {
+	eng := &Engine{
+		WorkspaceRoot: "/workspace",
+		Extractor: &mockExtractor{
+			defs: []*SymDefinition{
+				{File: "pkg/alpha.go", Line: 10, EndLine: 20, Type: "class", Language: "go", Body: "type Target struct{}"},
+				{File: "pkg/zeta.go", Line: 30, EndLine: 40, Type: "class", Language: "go", Body: "type Target struct{}"},
+			},
+		},
+	}
+
+	result, err := eng.Query(context.Background(), QueryOptions{
+		Query: "Target",
+		Depth: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Definition == nil || result.Definition.File != "pkg/alpha.go" {
+		t.Fatalf("primary definition = %+v, want pkg/alpha.go", result.Definition)
+	}
+	if len(result.OtherDefinitions) != 1 {
+		t.Fatalf("OtherDefinitions len = %d, want 1", len(result.OtherDefinitions))
+	}
+	if result.OtherDefinitions[0].File != "pkg/zeta.go" {
+		t.Fatalf("other definition file = %q, want pkg/zeta.go", result.OtherDefinitions[0].File)
+	}
+}
+
+func TestRenderMarkdownVerboseShowsDiagnosticsAndOtherDefinitions(t *testing.T) {
+	result := &SymbolIntelligence{
+		Query:  "Target",
+		Symbol: "Target",
+		Status: "ok",
+		Definition: &SymDefinition{
+			File:         "pkg/alpha.go",
+			Line:         10,
+			EndLine:      20,
+			Type:         "class",
+			Signature:    "type Target struct {",
+			ViewStrategy: "signature_plus_outline",
+			Language:     "go",
+		},
+		OtherDefinitions: []SymDefinitionRef{
+			{File: "pkg/zeta.go", Line: 30, EndLine: 40, Type: "class"},
+		},
+		Meta: SymMeta{
+			SearchChain: []string{"symbol"},
+			Confidence:  0.85,
+			Budget:      ComputeBudget("auto", 1),
+		},
+	}
+
+	md := RenderMarkdown(result, true)
+
+	checks := []string{
+		"- view: `signature_plus_outline`",
+		"- confidence: `0.85`",
+		"- budget: `",
+		"## Other Definitions (1)",
+		"`pkg/zeta.go` (`class`, lines 30-40)",
+		"## Meta",
+		"`search_chain`: `symbol`",
+	}
+	for _, check := range checks {
+		if !strings.Contains(md, check) {
+			t.Errorf("missing %q in verbose render: %s", check, md)
+		}
 	}
 }
