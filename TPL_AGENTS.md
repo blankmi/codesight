@@ -1,55 +1,43 @@
-# Code navigation policy
+# Code exploration guidelines
 
-Use `cs` as the default retrieval front door.
-Avoid reading full files unless necessary.
+`cs` (CodeSight) is installed. It is a budget-controlled code intelligence CLI.
 
-## Repository retrieval policy
+## Retrieval policy
 
-1. Use `cs <query>` FIRST for all symbol lookups, references, callers, path discovery, stack-trace lookups, and code searches.
-2. DO NOT use `grep`, `find`, `cat`, or `ls -R` for first-pass retrieval when `cs` can answer.
-3. Use shell retrieval ONLY if `cs` returns `not_found`, `ambiguous`, or explicitly instructs you to use `grep`/`tail` for large non-code files.
-4. Use shell tools for execution tasks only: tests, builds, git, and patching.
+Use `cs` as the FIRST tool for any code question. Do not use `grep`, `find`, `cat`, or `rg` for initial discovery.
 
-## Unified retrieval
+`cs` already controls its own output size. Run it directly — never pipe through `head`, `tail`, or `grep`.
 
-Use `cs <query>` (or `cs query <query>`) as the single entry point:
-- symbol lookup: `cs Authenticate`
-- references + callers + implements: `cs auth.Login --depth 2`
-- path discovery: `cs pkg/auth.go`
-- text / error search: `cs "connection refused"`
-- broader context: `cs Authenticate --budget large`
+## Default: use `cs <symbol>`
 
-`cs` routes internally, fetches ranked evidence, slices definitions to fit the context budget, and returns Markdown. One call replaces multi-step extract → refs → callers chains.
+**Always start with `cs <symbol>`** — it finds the file, extracts the definition, and returns refs + callers in one call. You do NOT need to know the file path.
 
-## When to use other cs commands
+```bash
+cs storeSupplierDeleteList    # finds file, shows definition + refs + callers
+cs StartPageViewBean          # same — no file path needed
+```
 
-Fall back to individual commands only when the unified query is insufficient:
-- `cs search "<question>" --path .` for semantic / conceptual discovery (requires Milvus + Ollama)
-- `cs extract -f <file> -s <symbol>` for raw symbol extraction when you need the full body
-- `cs refs`, `cs callers`, `cs implements` for standalone navigation when you need unranked, unbudgeted output
+## Specialized subcommands (only when needed)
 
-## Reading discipline
-
-Do NOT:
-- open many full files during exploration
-- read large files before trying `cs <query>` first
-- read files sequentially when they can be batched
-- use `grep` or `find` when `cs` can answer the same question
-
-Before reading, identify all needed files first. Batch reads in parallel instead of reading one file at a time.
-
-For any code investigation, follow this order strictly:
-1. `cs <query>` to get symbol + ranked references + callers
-2. follow `next_hint` if broader context is needed
-3. `cs search` for conceptual discovery if the symbol is unknown
-4. full file read only if `cs` output is insufficient
-
-## Routing summary
-
-| Intent | Tool |
+| Need | Command |
 |---|---|
-| Any code retrieval (first pass) | `cs <query>` |
-| Conceptual / architectural discovery | `cs search` |
-| Raw symbol body | `cs extract` |
-| Shell fallback (after cs says to) | `grep` / `tail` |
-| Execution (tests, builds, git) | shell tools |
+| Interface/abstract implementations | `cs implements <type>` |
+| All references to a symbol | `cs refs <symbol>` |
+| Caller chain (who calls X) | `cs callers <symbol> --depth 2` |
+| Re-extract from a KNOWN file path | `cs extract -f <file> -s <symbol>` |
+| Conceptual / architectural question | `cs search "<question>" --path .` |
+| Need more context on a symbol | `cs <symbol> --depth 2 --budget large` |
+
+Do NOT use `cs extract` unless you already have the file path from a previous cs call. Use `cs <symbol>` instead.
+
+## CRITICAL: Do not loop
+
+- After ONE `cs <symbol>` call, STOP and use the result. Do not call `cs` again for the same or related symbols.
+- If you need broader context, use `--depth 2` or `--budget large` on the FIRST call.
+- **Maximum 3 cs calls per question.** If you haven't found the answer in 3 calls, switch to `rg` or file reads.
+
+## Rules
+
+1. Trust cs output. Do not re-verify with grep or file reads.
+2. Follow `next_hint` in the Meta section of cs output when you need more context.
+3. Fall back to `rg`/file reads ONLY when cs returns `not_found`, `ambiguous`, or you need non-code files.

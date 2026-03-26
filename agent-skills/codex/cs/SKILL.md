@@ -1,92 +1,65 @@
 ---
 name: cs
-description: Use the CodeSight `cs` CLI for code intelligence. `cs <query>` is the default retrieval front door for symbol lookups, references, callers, path discovery, and text search. Falls back to `cs search` for conceptual discovery, `cs extract` for raw symbol bodies, and individual commands when needed. Trigger when tasks need code retrieval, symbol tracing, conceptual discovery, or CodeSight config/runtime diagnosis.
+description: "Budget-controlled code intelligence CLI. Always start with `cs <symbol>` — it finds the file, extracts the definition, and returns refs + callers in one call. Use specialized subcommands (cs implements, cs refs, cs callers) for specific needs. Do NOT use cs extract unless you already know the file path."
 ---
 
 # CodeSight (`cs`)
 
-## Repository retrieval policy
+## Retrieval policy
 
-1. Use `cs <query>` FIRST for all symbol lookups, references, callers, path discovery, stack-trace lookups, and code searches.
-2. DO NOT use `grep`, `find`, `cat`, or `ls -R` for first-pass retrieval when `cs` can answer.
-3. Use shell retrieval ONLY if `cs` returns `not_found`, `ambiguous`, or explicitly instructs you to use `grep`/`tail` for large non-code files.
-4. Use shell tools for execution tasks only: tests, builds, git, and patching.
+Use `cs` as the FIRST tool for any code question. Do not use `rg`, `grep`, `find`, or `cat` for initial discovery.
 
-## Workflow
+`cs` already controls its own output size. Run it directly — never pipe through `head`, `tail`, or `grep`.
 
-1. Resolve the target repository path.
-- Use the user's path if provided.
-- Otherwise use the current working directory.
+## Default: use `cs <symbol>`
 
-2. Start with unified retrieval for any code investigation.
-- Symbol lookup: `cs Authenticate`
-- References + callers + implements: `cs auth.Login --depth 2`
-- Path discovery: `cs pkg/auth.go`
-- Text / error search: `cs "connection refused"`
-- More context: `cs Authenticate --budget large`
+**Always start with `cs <symbol>`** — it finds the file, extracts the definition, and returns refs + callers in one call. You do NOT need to know the file path.
 
-3. Follow `next_hint` in the Meta section of `cs` output for deeper exploration.
+```bash
+cs storeSupplierDeleteList    # finds file, shows definition + refs + callers
+cs StartPageViewBean          # same — no file path needed
+```
 
-4. Fall back to individual commands only when unified retrieval is insufficient.
-- "How does X work?" or feature discovery: use `cs search`.
-- Raw symbol body: use `cs extract -f <file-or-dir> -s <symbol>`.
-- Standalone unranked references: use `cs refs <symbol>`.
-- Standalone unranked callers: use `cs callers <symbol>`.
-- Standalone implementations: use `cs implements <symbol>`.
-- "Set up CodeSight for this repo": use `cs init [path]`.
-- "Show me the effective CodeSight config": use `cs config [path]`.
-- "Warm or inspect the LSP daemon": use `cs lsp ...`.
+## Specialized subcommands (only when needed)
 
-5. For conceptual discovery, manage index lifecycle first.
-- Run `cs status <path>`.
-- If not indexed or stale, run `cs index <path> --branch <branch> --commit <sha>`.
-- Use `--force` only when re-index is explicitly needed.
-- Treat `cs clear <path>` as destructive.
+| Need | Command |
+|---|---|
+| Interface/abstract implementations | `cs implements <type>` |
+| All references to a symbol | `cs refs <symbol>` |
+| Caller chain (who calls X) | `cs callers <symbol> --depth 2` |
+| Re-extract from a KNOWN file path | `cs extract -f <file> -s <symbol>` |
+| Conceptual / architectural question | `cs search "<question>" --path .` |
+| Need more context on a symbol | `cs <symbol> --depth 2 --budget large` |
 
-6. Respect runtime constraints.
-- `cs <query>` works locally for symbol, path, and text queries; LSP daemon recommended for references/callers/implements.
-- `cs search`, `cs index`, `cs status`, and `cs clear` require Milvus and Ollama.
-- `cs extract`, `cs init`, and `cs config` are local filesystem operations.
-- `cs refs`, `cs callers`, `cs implements`, and `cs lsp` run language servers as child processes over stdio.
-- `cs refs` may fall back to grep when LSP is unavailable.
-- `cs callers` and `cs implements` do not fall back to grep.
-- `${CODESIGHT_STATE_DIR:-~/.codesight}` persistence is recommended for warm starts, not required for correctness.
+Do NOT use `cs extract` unless you already have the file path from a previous cs call. Use `cs <symbol>` instead.
 
-## Codex Execution Rule
+For full command reference, read [reference.md](reference.md).
 
-In sandboxed Codex sessions:
-- `cs search`, `cs index`, `cs status`, and `cs clear` usually need network access to reach Milvus or Ollama.
-- `cs <query>`, `cs extract`, `cs init`, `cs config`, `cs refs`, `cs callers`, `cs implements`, and `cs lsp` usually stay inside the filesystem and local process sandbox, assuming required binaries are installed.
-- If a semantic command fails because of sandboxed network access, rerun it with:
-  - `sandbox_permissions: "require_escalated"`
-  - `justification`: ask to allow CodeSight to reach the local Milvus or Ollama service
+## STOP AFTER EACH CALL
 
-After first approval, request a persistent shell prefix rule for `["cs"]` if the user wants CodeSight commands to run without repeated shell-approval prompts.
+cs output is ranked and budgeted. After each call:
 
-## Command Patterns
+1. READ the result. It contains the definition, references, and callers you need.
+2. ANSWER the question if the result is sufficient. Do NOT make another cs call.
+3. Only make a follow-up call if the result says `not_found` or `ambiguous`, or you need a DIFFERENT symbol.
 
-- Unified retrieval: `cs <query> [--path <dir>] [--depth <n>] [--budget auto|small|medium|large] [--mode auto|symbol|text|ast|path]`
-- Discovery: `cs search "<query>" [--path <dir>] [--ext .go,.ts] [--limit <n>]`
-- Index status: `cs status [path]`
-- Build or refresh index: `cs index [path] [--branch <name>] [--commit <sha>] [--force]`
-- Clear index: `cs clear [path]`
-- Symbol extraction: `cs extract -f <file-or-dir> -s <symbol> [--format raw|json]`
-- References: `cs refs <symbol> [--path <dir>] [--kind function|method|class|interface|type|constant]`
-- Incoming callers: `cs callers <symbol> [--path <dir>] [--depth <n>]`
-- Implementations: `cs implements <symbol> [--path <dir>]`
-- Initialize repo config: `cs init [path]`
-- Show effective config: `cs config [path]`
-- LSP warmup: `cs lsp warmup [path]`
-- LSP status: `cs lsp status [path]`
-- LSP restart: `cs lsp restart [path]`
-- LSP cleanup: `cs lsp cleanup`
+**Maximum 3 cs calls per question.** If 3 calls haven't answered the question, switch to `rg` or file reads.
 
-## Guardrails
+Do NOT:
+- Use `cs extract` without a known file path — use `cs <symbol>` instead
+- Chain `cs query → cs query` for the same or related symbols
+- Pipe cs output through `head` or `tail`
 
-- Use `cs <query>` as the default first step for any code investigation.
-- Follow the `next_hint` in the Meta section for deeper exploration.
-- Do not use `grep` or `find` for first-pass code retrieval when `cs` can answer.
-- Use `cs extract` instead of broad file reads when the task only needs one symbol's raw body.
-- Re-index when repository HEAD changes significantly or when stale status is reported.
-- If `cs <query>` returns `not_found`, try alternate phrasing or `cs search` before falling back to shell tools.
-- Treat `cs clear` as destructive.
+## Key flags
+
+- `--depth <n>` — caller expansion depth (default 1)
+- `--budget auto|small|medium|large` — output size target
+- `--path <dir>` — scope to a subdirectory
+- `--mode auto|symbol|text|ast|path` — override query classification
+
+## Fallback
+
+Use `rg` or file reads ONLY when:
+- cs returns `not_found` or `ambiguous`
+- cs output explicitly says to use shell tools
+- You need non-code files (configs, logs, docs)

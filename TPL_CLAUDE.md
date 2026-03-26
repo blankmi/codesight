@@ -1,56 +1,52 @@
 # Code exploration guidelines
 
-Use `cs` as the default retrieval front door. Minimize full-file reads.
+`cs` (CodeSight) is installed. It is a budget-controlled code intelligence CLI.
 
-## Repository retrieval policy
+## Retrieval policy
 
-1. Use `cs <query>` FIRST for all symbol lookups, references, callers, path discovery, stack-trace lookups, and code searches.
-2. DO NOT use `rg`, `grep`, `find`, `cat`, or `ls -R` for first-pass retrieval when `cs` can answer.
-3. Use shell retrieval ONLY if `cs` returns `not_found`, `ambiguous`, or explicitly instructs you to use `grep`/`tail` for large non-code files.
-4. Use shell tools for execution tasks only: tests, builds, git, and patching.
+Use `cs` via Bash as the FIRST tool for any code question.
 
-## Unified retrieval
+`cs` already controls its own output size. Run it directly — never pipe through `head`, `tail`, or `grep`:
+```bash
+# correct
+cs refs DateUtil
+# wrong — do not truncate cs output
+cs refs DateUtil | head -80
+```
 
-Use `cs <query>` (or `cs query <query>`) as the single entry point for all code intelligence:
-- symbol lookup: `cs Authenticate`
-- references + callers + implements: `cs auth.Login --depth 2`
-- path discovery: `cs pkg/auth.go`
-- text / error search: `cs "connection refused"`
-- broader context: `cs Authenticate --budget large`
+## Default: use `cs <symbol>`
 
-`cs` routes internally, fetches ranked evidence, slices definitions to fit the context budget, and returns Markdown. One call replaces multi-step extract → refs → callers chains.
+**Always start with `cs <symbol>`** — it finds the file, extracts the definition, and returns refs + callers in one call. You do NOT need to know the file path.
 
-## When to use other cs commands
+```bash
+# This is almost always the right first call:
+cs storeSupplierDeleteList
+cs StartPageViewBean
+cs DateUtil
+```
 
-Fall back to individual commands only when the unified query is insufficient:
-- `cs search "<question>" --path .` for semantic / conceptual discovery (requires Milvus + Ollama)
-- `cs extract -f <file> -s <symbol>` for raw symbol extraction when you need the full body
-- `cs refs`, `cs callers`, `cs implements` for standalone navigation when you need unranked, unbudgeted output
+## Specialized subcommands (only when needed)
 
-## Targeted reading
-
-Do not read full files by default. Instead:
-- use `cs <symbol>` to get the definition, references, and callers in one call
-- read full files only when surrounding context is required
-
-Do not re-read files you have already seen in this conversation.
-
-## Exploration pattern
-
-For non-trivial tasks:
-1. `cs <query>` to get symbol definition + ranked references + callers
-2. follow `next_hint` in the Meta section if broader context is needed
-3. expand to full-file reads only where necessary
-
-Do not read multiple large files to build understanding.
-Do not read a file "just to be sure" if you already have the information you need.
-
-## Routing summary
-
-| Intent | Tool |
+| Need | Command |
 |---|---|
-| Any code retrieval (first pass) | `cs <query>` |
-| Conceptual / architectural discovery | `cs search` |
-| Raw symbol body | `cs extract` |
-| Shell fallback (after cs says to) | `grep` / `tail` |
-| Execution (tests, builds, git) | shell tools |
+| Interface/abstract implementations | `cs implements <type>` |
+| All references to a symbol | `cs refs <symbol>` |
+| Caller chain (who calls X) | `cs callers <symbol> --depth 2` |
+| Re-extract from a KNOWN file path | `cs extract -f <file> -s <symbol>` |
+| Conceptual / architectural question | `cs search "<question>" --path .` |
+| Need more context on a symbol | `cs <symbol> --depth 2 --budget large` |
+
+Do NOT use `cs extract` unless you already have the file path from a previous cs call. Use `cs <symbol>` instead.
+
+## CRITICAL: Call limits
+
+- **Maximum 3 cs calls per question.** After 3 calls, switch to Grep/Read.
+- After ONE `cs` call for a symbol, STOP and use the result. Do not call `cs` again for the same symbol.
+- If you need broader context, use `--depth 2` or `--budget large` on the FIRST call. Do not make a second call.
+
+## Rules
+
+1. Trust cs output — even if the result is small (e.g. "1 references found"), that IS the complete answer. Do not re-query the same symbol for confirmation.
+2. Do NOT chain `cs query → cs query` for the same or related symbols.
+3. Follow `next_hint` in the Meta section of cs output when you need more context.
+4. Fall back to Grep/Read ONLY when cs returns `not_found`, `ambiguous`, or you need non-code files.
