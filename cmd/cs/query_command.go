@@ -109,6 +109,7 @@ func executeQueryCommand(ctx context.Context, opts queryCommandOptions) (string,
 					Store:    store,
 					Embedder: newEmbedder(cfg),
 				},
+				CollectionName: cfg.DB.CollectionName,
 			}
 			defer store.Close()
 		}

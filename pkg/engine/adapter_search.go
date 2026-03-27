@@ -9,15 +9,17 @@ import (
 
 // SemanticSearchAdapter wraps pkg.Searcher to implement SearchProvider.
 type SemanticSearchAdapter struct {
-	Searcher *pkg.Searcher
+	Searcher       *pkg.Searcher
+	CollectionName string
 }
 
 // Search performs a semantic search and converts results to SymReference.
 func (a *SemanticSearchAdapter) Search(ctx context.Context, workspaceRoot, query string, limit int) ([]SymReference, error) {
 	output, err := a.Searcher.Search(ctx, pkg.SearchOptions{
-		Path:  workspaceRoot,
-		Query: query,
-		Limit: limit,
+		Path:           workspaceRoot,
+		CollectionName: a.CollectionName,
+		Query:          query,
+		Limit:          limit,
 	})
 	if err != nil {
 		return nil, err
