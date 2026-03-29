@@ -11,6 +11,9 @@ const (
 	MethodShutdown                         = "shutdown"
 	MethodExit                             = "exit"
 	MethodWorkspaceSymbol                  = "workspace/symbol"
+	MethodTextDocumentDidOpen              = "textDocument/didOpen"
+	MethodTextDocumentDidClose             = "textDocument/didClose"
+	MethodTextDocumentPublishDiagnostics   = "textDocument/publishDiagnostics"
 	MethodTextDocumentReferences           = "textDocument/references"
 	MethodTextDocumentImplementation       = "textDocument/implementation"
 	MethodTextDocumentPrepareCallHierarchy = "textDocument/prepareCallHierarchy"
@@ -73,6 +76,24 @@ type TextDocumentIdentifier struct {
 	URI DocumentURI `json:"uri"`
 }
 
+// TextDocumentItem describes an open text document.
+type TextDocumentItem struct {
+	URI        DocumentURI `json:"uri"`
+	LanguageID string      `json:"languageId"`
+	Version    int         `json:"version"`
+	Text       string      `json:"text"`
+}
+
+// DidOpenTextDocumentParams describes textDocument/didOpen params.
+type DidOpenTextDocumentParams struct {
+	TextDocument TextDocumentItem `json:"textDocument"`
+}
+
+// DidCloseTextDocumentParams describes textDocument/didClose params.
+type DidCloseTextDocumentParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
 // TextDocumentPositionParams combines a document identifier and a position.
 type TextDocumentPositionParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
@@ -133,6 +154,31 @@ type ReferenceContext struct {
 type ReferenceParams struct {
 	TextDocumentPositionParams
 	Context ReferenceContext `json:"context"`
+}
+
+// DiagnosticSeverity is the LSP diagnostic severity enum.
+type DiagnosticSeverity int
+
+const (
+	DiagnosticSeverityError DiagnosticSeverity = 1 + iota
+	DiagnosticSeverityWarning
+	DiagnosticSeverityInformation
+	DiagnosticSeverityHint
+)
+
+// Diagnostic describes one diagnostic reported for a document.
+type Diagnostic struct {
+	Range    Range              `json:"range"`
+	Severity DiagnosticSeverity `json:"severity,omitempty"`
+	Code     any                `json:"code,omitempty"`
+	Source   string             `json:"source,omitempty"`
+	Message  string             `json:"message"`
+}
+
+// PublishDiagnosticsParams describes textDocument/publishDiagnostics params.
+type PublishDiagnosticsParams struct {
+	URI         DocumentURI  `json:"uri"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 
 // CallHierarchyPrepareParams describes call hierarchy preparation params.

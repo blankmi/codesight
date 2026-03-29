@@ -65,6 +65,10 @@ type Client struct {
 	pendingMu sync.Mutex
 	pending   map[int64]chan ResponseMessage
 
+	notificationMu     sync.RWMutex
+	notificationNextID int64
+	notifications      map[string]map[int64]func(json.RawMessage)
+
 	initMu      sync.Mutex
 	initialized bool
 
@@ -87,6 +91,7 @@ func NewClient(transport io.ReadWriteCloser, opts ...ClientOption) (*Client, err
 		writer:         bufio.NewWriter(transport),
 		requestTimeout: defaultClientRequestTimeout,
 		pending:        make(map[int64]chan ResponseMessage),
+		notifications:  make(map[string]map[int64]func(json.RawMessage)),
 		done:           make(chan struct{}),
 	}
 	client.nextID.Store(1)
@@ -127,6 +132,52 @@ func (c *Client) Initialize(ctx context.Context, params InitializeParams) (Initi
 
 	c.initialized = true
 	return result, nil
+}
+
+// SubscribeNotification registers a handler for one server notification method.
+// The returned function removes the handler when called.
+func (c *Client) SubscribeNotification(method string, handler func(json.RawMessage)) (func(), error) {
+	if c == nil {
+		return nil, errors.New("client is nil")
+	}
+	if handler == nil {
+		return nil, errors.New("notification handler is nil")
+	}
+
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return nil, errors.New("notification method is required")
+	}
+	if c.isDone() {
+		return nil, c.transportErr()
+	}
+
+	c.notificationMu.Lock()
+	defer c.notificationMu.Unlock()
+
+	c.notificationNextID++
+	handlerID := c.notificationNextID
+
+	handlers := c.notifications[method]
+	if handlers == nil {
+		handlers = make(map[int64]func(json.RawMessage))
+		c.notifications[method] = handlers
+	}
+	handlers[handlerID] = handler
+
+	return func() {
+		c.notificationMu.Lock()
+		defer c.notificationMu.Unlock()
+
+		handlers := c.notifications[method]
+		if handlers == nil {
+			return
+		}
+		delete(handlers, handlerID)
+		if len(handlers) == 0 {
+			delete(c.notifications, method)
+		}
+	}, nil
 }
 
 // Notify sends an LSP notification without waiting for a response.
@@ -344,6 +395,26 @@ func (c *Client) transportErr() error {
 	return ErrClientClosed
 }
 
+func (c *Client) dispatchNotification(method string, params json.RawMessage) {
+	c.notificationMu.RLock()
+	registered := c.notifications[method]
+	if len(registered) == 0 {
+		c.notificationMu.RUnlock()
+		return
+	}
+
+	handlers := make([]func(json.RawMessage), 0, len(registered))
+	for _, handler := range registered {
+		handlers = append(handlers, handler)
+	}
+	c.notificationMu.RUnlock()
+
+	payload := append(json.RawMessage(nil), params...)
+	for _, handler := range handlers {
+		handler(payload)
+	}
+}
+
 func (c *Client) isDone() bool {
 	select {
 	case <-c.done:
@@ -366,6 +437,7 @@ func (c *Client) readLoop() {
 		var envelope struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
 		}
 		if err := json.Unmarshal(payload, &envelope); err != nil {
 			c.failPending(fmt.Errorf("decode lsp message envelope: %w", err))
@@ -374,6 +446,7 @@ func (c *Client) readLoop() {
 
 		if envelope.Method != "" {
 			if len(envelope.ID) == 0 {
+				c.dispatchNotification(envelope.Method, envelope.Params)
 				continue
 			}
 			if err := c.replyMethodNotFound(envelope.ID); err != nil {

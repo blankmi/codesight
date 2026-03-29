@@ -21,9 +21,6 @@ func TestNewQuerySemanticSearchAdapterUsesConfiguredCollectionName(t *testing.T)
 		},
 		CollectionName: cfg.DB.CollectionName,
 	}
-	if adapter == nil {
-		t.Fatal("adapter is nil")
-	}
 	if adapter.CollectionName != "shared_collection" {
 		t.Fatalf("collection name = %q, want %q", adapter.CollectionName, "shared_collection")
 	}

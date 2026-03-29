@@ -19,7 +19,7 @@ func commandTargetPath(cmd *cobra.Command, args []string) (string, error) {
 	switch cmd {
 	case queryCmd, searchCmd, refsCmd, callersCmd, implementsCmd:
 		return cmd.Flags().GetString("path")
-	case indexCmd, statusCmd, clearCmd, configCmd:
+	case checkCmd, indexCmd, statusCmd, clearCmd, configCmd:
 		if len(args) > 0 {
 			return args[0], nil
 		}

@@ -238,6 +238,7 @@ func init() {
 	queryCmd.Flags().String("mode", "auto", "override router: auto|symbol|text|ast|path")
 
 	rootCmd.AddCommand(queryCmd)
+	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(indexCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(extractCmd)

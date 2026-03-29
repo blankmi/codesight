@@ -1,6 +1,6 @@
 # codesight (`cs`)
 
-Unified code intelligence CLI for large codebases. `cs` provides a single-call retrieval front door (`cs <query>`) that routes, ranks, and budgets code intelligence from symbol extraction, references, callers, and implementations — replacing multi-step agent retrieval. It also includes semantic discovery (`search`), index lifecycle management (`index`, `status`, `clear`), surgical symbol extraction (`extract`), LSP-powered navigation (`refs`, `callers`, `implements`), project configuration (`init`, `config`), and LSP daemon lifecycle tooling (`lsp`).
+Unified code intelligence CLI for large codebases. `cs` provides a single-call retrieval front door (`cs <query>`) that routes, ranks, and budgets code intelligence from symbol extraction, references, callers, and implementations — replacing multi-step agent retrieval. It also includes semantic discovery (`search`), index lifecycle management (`index`, `status`, `clear`), surgical symbol extraction (`extract`), LSP-powered syntax checks (`check`), LSP-powered navigation (`refs`, `callers`, `implements`), project configuration (`init`, `config`), and LSP daemon lifecycle tooling (`lsp`).
 
 > **Benchmark results (Opus 4.6, 250K LOC Java codebase, 24 agent invocations):**
 > - Conceptual queries ("how does auth work?"): **51% faster, 25% cheaper, 69% fewer tool calls** vs no instructions
@@ -9,7 +9,7 @@ Unified code intelligence CLI for large codebases. `cs` provides a single-call r
 > - Lexical/reference/symbol queries: Grep was already optimal, so instructions neither helped nor hurt
 > - Total across all query types: **22% cost reduction, 40% faster**
 >
-> Grep handles exact lookups. `cs search` fills the conceptual gap: "how does X work?" across a large codebase. `cs extract` reads one symbol without loading entire files. `cs refs`/`callers`/`implements` add cross-file navigation on top.
+> Grep handles exact lookups. `cs search` fills the conceptual gap: "how does X work?" across a large codebase. `cs extract` reads one symbol without loading entire files. `cs check` adds fast syntax-error feedback, and `cs refs`/`callers`/`implements` add cross-file navigation on top.
 
 ## How it works
 
@@ -46,10 +46,11 @@ No external services required. `cs extract` uses tree-sitter to extract a named 
 
 In benchmarks, agents using `cs extract` replaced 22-32 full-file reads with 7-8 targeted symbol extractions during conceptual work.
 
-### LSP navigation (`cs refs`, `cs callers`, `cs implements`)
+### LSP checks and navigation (`cs check`, `cs refs`, `cs callers`, `cs implements`)
 
 Requires a language server binary such as `gopls`, `jdtls`, `pylsp`, `typescript-language-server`, `rust-analyzer`, or `clangd`.
 
+- `cs check` opens files through LSP and reports error diagnostics for fast syntax feedback.
 - `cs refs` is LSP-first and falls back to grep if LSP startup fails or no supported LSP language is detected.
 - `cs callers` and `cs implements` require LSP and fail fast with install guidance.
 - On macOS and Linux, `cs` reuses background LSP daemons to avoid repeated cold starts.
@@ -82,7 +83,7 @@ Works locally with no external services:
 
 Requires external services:
 - Semantic search and index lifecycle (`cs index`, `cs search`, `cs status`, `cs clear`): [Ollama](https://ollama.com) + [Milvus](https://milvus.io)
-- LSP navigation (`cs refs`, `cs callers`, `cs implements`, `cs lsp`): a language server for your language
+- LSP checks and navigation (`cs check`, `cs refs`, `cs callers`, `cs implements`, `cs lsp`): a language server for your language
 
 Optional but recommended:
 - Persist LSP daemon state in `CODESIGHT_STATE_DIR` or use the runtime default under `~/.codesight`
@@ -171,6 +172,14 @@ cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind
 cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind --format json
 ```
 
+### Check syntax errors
+
+```bash
+cs check ./cmd/cs/check_command.go
+cs check ./cmd/cs/check_command.go ./pkg/lsp/check.go
+cs check ./cmd/cs
+```
+
 ### Find references
 
 ```bash
@@ -214,6 +223,7 @@ All commands support `-v, --verbose`.
 | `cs status` | `cs status [path]` | Reports index freshness |
 | `cs clear` | `cs clear [path]` | Drops the index for a project |
 | `cs extract` | `cs extract -f <file-or-dir> -s <symbol> [--format raw|json]` | AST-based symbol extraction |
+| `cs check` | `cs check <path> [path...]` | LSP-powered syntax-error feedback for one or more files or a small directory |
 | `cs refs` | `cs refs <symbol> [--path <dir>] [--kind <kind>]` | `--kind`: `function`, `method`, `class`, `interface`, `type`, `constant` |
 | `cs callers` | `cs callers <symbol> [--path <dir>] [--depth <n>]` | Incoming call hierarchy; depth defaults to `1` |
 | `cs implements` | `cs implements <symbol> [--path <dir>]` | Type or interface implementations |

@@ -321,6 +321,72 @@ func TestClientConcurrentRequestHandling(t *testing.T) {
 	}
 }
 
+func TestClientNotificationSubscription(t *testing.T) {
+	client, server := newClientPipe(t, WithRequestTimeout(2*time.Second))
+	defer closePipeClient(t, client, server)
+
+	received := make(chan PublishDiagnosticsParams, 1)
+	unsubscribe, err := client.SubscribeNotification(MethodTextDocumentPublishDiagnostics, func(raw json.RawMessage) {
+		var params PublishDiagnosticsParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			received <- PublishDiagnosticsParams{
+				URI: DocumentURI("decode-error:" + err.Error()),
+			}
+			return
+		}
+		received <- params
+	})
+	if err != nil {
+		t.Fatalf("SubscribeNotification returned error: %v", err)
+	}
+	defer unsubscribe()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		notification := NotificationMessage{
+			JSONRPC: JSONRPCVersion,
+			Method:  MethodTextDocumentPublishDiagnostics,
+			Params: PublishDiagnosticsParams{
+				URI: "file:///workspace/main.go",
+				Diagnostics: []Diagnostic{
+					{
+						Range: Range{
+							Start: Position{Line: 2, Character: 3},
+							End:   Position{Line: 2, Character: 4},
+						},
+						Severity: DiagnosticSeverityError,
+						Message:  "unexpected token",
+					},
+				},
+			},
+		}
+		if err := writeServerMessage(server.writer, notification); err != nil {
+			serverDone <- fmt.Errorf("write notification: %w", err)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	select {
+	case params := <-received:
+		if params.URI != "file:///workspace/main.go" {
+			t.Fatalf("notification URI = %q, want %q", params.URI, "file:///workspace/main.go")
+		}
+		if len(params.Diagnostics) != 1 {
+			t.Fatalf("diagnostics count = %d, want 1", len(params.Diagnostics))
+		}
+		if params.Diagnostics[0].Message != "unexpected token" {
+			t.Fatalf("diagnostic message = %q, want %q", params.Diagnostics[0].Message, "unexpected token")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for notification")
+	}
+
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server goroutine failed: %v", err)
+	}
+}
+
 func TestClientGracefulShutdown(t *testing.T) {
 	client, server := newClientPipe(t, WithRequestTimeout(2*time.Second))
 	defer closePipeClient(t, client, server)

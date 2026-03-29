@@ -31,6 +31,7 @@ cs StartPageViewBean          # same — no file path needed
 | Re-extract from a KNOWN file path | `cs extract -f <file> -s <symbol>` |
 | Conceptual / architectural question | `cs search "<question>" --path .` |
 | Need more context on a symbol | `cs <symbol> --depth 2 --budget large` |
+| Fast syntax-error feedback for one or more files | `cs check <path> [path...]` |
 
 Do NOT use `cs extract` unless you already have the file path from a previous cs call. Use `cs <symbol>` instead.
 

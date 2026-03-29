@@ -93,6 +93,16 @@ cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind
 cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind --format json
 ```
 
+### `cs check <path> [path...]`
+
+Check one or more files or a small directory for LSP-reported syntax errors. Requires LSP. Directories with more than 50 matching files are rejected — pass individual files instead.
+
+```bash
+cs check ./cmd/cs/check_command.go
+cs check ./cmd/cs/check_command.go ./pkg/lsp/check.go
+cs check ./cmd/cs
+```
+
 ### `cs refs <symbol>`
 
 Find references for a symbol. Falls back to grep if LSP is unavailable.
@@ -180,6 +190,9 @@ cs search "error wrapping and context" --path . --ext .go --limit 20
 
 # Extract one symbol instead of reading the whole file
 cs extract -f ./pkg/lsp/refs.go -s NormalizeRefKind
+
+# Fast syntax-error feedback
+cs check ./cmd/cs/main.go
 
 # Inspect effective config
 cs config .
