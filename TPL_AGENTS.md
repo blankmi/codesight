@@ -29,16 +29,21 @@ cs StartPageViewBean          # same — no file path needed
 | Need more context on a symbol | `cs <symbol> --depth 2 --budget large` |
 | Fast syntax-error feedback for one or more files | `cs check <path> [path...]` |
 
+
 Do NOT use `cs extract` unless you already have the file path from a previous cs call. Use `cs <symbol>` instead.
 
 ## CRITICAL: Do not loop
 
-- After ONE `cs <symbol>` call, STOP and use the result. Do not call `cs` again for the same or related symbols.
+- After the first `cs <symbol>` call, use the result directly. Do not chain repeated guessed-symbol `cs` calls for the same question.
+- If `cs` already gave you the file, definition, refs, or callers you need, stop there. Do not re-open that same file with `sed`, `nl`, `cat`, or `rg`.
+- If you already know the file or the symptom is file-driven, use `cs extract` with the known path only when `cs` did not already show the required source lines.
+- For code files, prefer another targeted `cs` call (`cs extract`, `cs refs`, `cs callers`, `cs search`) over `sed` or `rg`.
+- If you need more source from a known code file, use another `cs extract -f <file> -s <symbol>` call instead of `sed` or `cat`.
 - If you need broader context, use `--depth 2` or `--budget large` on the FIRST call.
-- **Maximum 3 cs calls per question.** If you haven't found the answer in 3 calls, switch to `rg` or file reads.
+- Do not switch from `cs` to `sed` or `rg` just because you already made a few `cs` calls.
 
 ## Rules
 
 1. Trust cs output. Do not re-verify with grep or file reads.
 2. Follow `next_hint` in the Meta section of cs output when you need more context.
-3. Fall back to `rg`/file reads ONLY when cs returns `not_found`, `ambiguous`, or you need non-code files.
+3. Fall back to `rg`/file reads ONLY when `cs` returns `not_found`, `ambiguous`, or you need non-code files.
