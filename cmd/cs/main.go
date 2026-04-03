@@ -242,6 +242,7 @@ func init() {
 	rootCmd.AddCommand(indexCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(extractCmd)
+	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(refsCmd)
 	rootCmd.AddCommand(callersCmd)
 	rootCmd.AddCommand(implementsCmd)
