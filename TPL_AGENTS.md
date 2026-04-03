@@ -1,49 +1,34 @@
-# Code exploration guidelines
+# CodeSight (`cs`) — code intelligence CLI
 
-`cs` (CodeSight) is installed. It is a budget-controlled code intelligence CLI.
-
-## Retrieval policy
-
-Use `cs` as the FIRST tool for any code question. Do not use `grep`, `find`, `cat`, or `rg` for initial discovery.
-
-`cs` already controls its own output size. Run it directly — never pipe through `head`, `tail`, or `grep`.
-
-## Default: use `cs <symbol>`
-
-**Always start with `cs <symbol>`** — it finds the file, extracts the definition, and returns refs + callers in one call. You do NOT need to know the file path.
+## Quick reference
 
 ```bash
-cs storeSupplierDeleteList    # finds file, shows definition + refs + callers
-cs StartPageViewBean          # same — no file path needed
+cs list -f path/to/package/           # module map: all symbols with file, type, LOC
+cs list -f path/to/file.go            # symbols in one file
+cs MyFunction                         # definition + refs + callers (no file path needed)
+cs search "auth middleware" --path .   # conceptual / architectural question
+cs extract -f path/to/file.go -s Func # re-extract from a known file
+cs implements MyInterface              # find implementations
+cs callers MyFunc --depth 2            # caller chain
+cs refs MySymbol                       # all references
+cs check path/to/file.go              # syntax-error check
 ```
 
-## Specialized subcommands (only when needed)
+## Workflow example
 
-| Need | Command |
-|---|---|
-| Interface/abstract implementations | `cs implements <type>` |
-| All references to a symbol | `cs refs <symbol>` |
-| Caller chain (who calls X) | `cs callers <symbol> --depth 2` |
-| Re-extract from a KNOWN file path | `cs extract -f <file> -s <symbol>` |
-| Conceptual / architectural question | `cs search "<question>" --path .` |
-| Need more context on a symbol | `cs <symbol> --depth 2 --budget large` |
-| Fast syntax-error feedback for one or more files | `cs check <path> [path...]` |
+```bash
+cs list -f internal/orchestrator/                    # 1. see structure + file sizes
+cs Orchestrator                                      # 2. targeted symbol detail
+sed -n '1,200p' internal/orchestrator/orchestrator.go # 3. read files for implementation
+```
 
+## Do
 
-Do NOT use `cs extract` unless you already have the file path from a previous cs call. Use `cs <symbol>` instead.
+- Use `cs list -f <dir>` first to see module structure and file sizes.
+- Use `cs <symbol>` for targeted symbol questions.
+- Read files directly for broad understanding or implementation.
 
-## CRITICAL: Do not loop
+## Don't
 
-- After the first `cs <symbol>` call, use the result directly. Do not chain repeated guessed-symbol `cs` calls for the same question.
-- If `cs` already gave you the file, definition, refs, or callers you need, stop there. Do not re-open that same file with `sed`, `nl`, `cat`, or `rg`.
-- If you already know the file or the symptom is file-driven, use `cs extract` with the known path only when `cs` did not already show the required source lines.
-- For code files, prefer another targeted `cs` call (`cs extract`, `cs refs`, `cs callers`, `cs search`) over `sed` or `rg`.
-- If you need more source from a known code file, use another `cs extract -f <file> -s <symbol>` call instead of `sed` or `cat`.
-- If you need broader context, use `--depth 2` or `--budget large` on the FIRST call.
-- Do not switch from `cs` to `sed` or `rg` just because you already made a few `cs` calls.
-
-## Rules
-
-1. Trust cs output. Do not re-verify with grep or file reads.
-2. Follow `next_hint` in the Meta section of cs output when you need more context.
-3. Fall back to `rg`/file reads ONLY when `cs` returns `not_found`, `ambiguous`, or you need non-code files.
+- Don't chain `cs` calls — if you need more after 2-3 calls, read the file.
+- Don't re-read what `cs` already showed you.
