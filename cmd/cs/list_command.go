@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	extractpkg "github.com/blankbytes/codesight/pkg/extract"
 	"github.com/spf13/cobra"
@@ -19,6 +20,7 @@ func init() {
 	listCmd.Flags().StringP("lang", "l", "", "language filter (optional)")
 	listCmd.Flags().String("format", "raw", "output format (raw|json)")
 	listCmd.Flags().StringP("type", "t", "", "symbol type filter (optional)")
+	listCmd.Flags().Bool("summary", false, "summarize symbols per file (directory targets only)")
 
 	if err := listCmd.MarkFlagRequired("file"); err != nil {
 		panic(err)
@@ -42,14 +44,34 @@ func runList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	summary, err := cmd.Flags().GetBool("summary")
+	if err != nil {
+		return err
+	}
 
 	if resolved, err := resolveProjectPath(targetPath); err == nil {
 		targetPath = resolved
 	}
 
-	result, err := extractpkg.ListSymbols(targetPath, language, format, symbolType)
-	if err != nil {
-		return err
+	var result extractpkg.ListResult
+	if summary {
+		info, err := os.Stat(targetPath)
+		if err != nil {
+			return fmt.Errorf("stat target: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("--summary requires --file to point to a directory")
+		}
+
+		result, err = extractpkg.ListSymbolsSummary(targetPath, language, format, symbolType)
+		if err != nil {
+			return err
+		}
+	} else {
+		result, err = extractpkg.ListSymbols(targetPath, language, format, symbolType)
+		if err != nil {
+			return err
+		}
 	}
 
 	if result.Output != "" {

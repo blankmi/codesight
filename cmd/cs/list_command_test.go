@@ -99,6 +99,40 @@ func TestListCommandDirectoryWarnsAndContinuesOnFileError(t *testing.T) {
 	}
 }
 
+func TestListCommandSummaryDirectory(t *testing.T) {
+	dir := extractFixturePath(t, "directory")
+
+	stdout, stderr, err := executeListRootCommand(t, "list", "-f", dir, "--summary")
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	if !strings.Contains(stdout, "(2 files, 9 lines)") {
+		t.Fatalf("summary header mismatch: %q", stdout)
+	}
+	if !strings.Contains(stdout, "alpha.go") || !strings.Contains(stdout, "function(1)") {
+		t.Fatalf("summary output missing alpha.go counts: %q", stdout)
+	}
+	if !strings.Contains(stdout, "nested/bravo.py") || !strings.Contains(stdout, "function(1)") {
+		t.Fatalf("summary output missing nested/bravo.py counts: %q", stdout)
+	}
+}
+
+func TestListCommandSummaryFileTargetErrors(t *testing.T) {
+	path := extractFixturePath(t, "languages", "sample.go")
+
+	_, _, err := executeListRootCommand(t, "list", "-f", path, "--summary")
+	if err == nil {
+		t.Fatal("expected summary file-target error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--summary requires --file to point to a directory") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
 func executeListRootCommand(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	resetListCommandFlagState(t)
@@ -117,7 +151,7 @@ func executeListRootCommand(t *testing.T, args ...string) (string, string, error
 func resetListCommandFlagState(t *testing.T) {
 	t.Helper()
 
-	for _, name := range []string{"file", "lang", "format", "type"} {
+	for _, name := range []string{"file", "lang", "format", "type", "summary"} {
 		flag := listCmd.Flags().Lookup(name)
 		if flag == nil {
 			t.Fatalf("list flag %q not found", name)

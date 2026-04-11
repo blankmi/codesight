@@ -1,12 +1,14 @@
 package extract
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	csignore "github.com/blankbytes/codesight/pkg/ignore"
@@ -143,6 +145,105 @@ func ListSymbols(targetPath, lang, format, symbolType string) (ListResult, error
 	}, nil
 }
 
+// ListSymbolsSummary summarizes symbols per file for a directory target.
+func ListSymbolsSummary(targetPath, lang, format, symbolType string) (ListResult, error) {
+	if strings.TrimSpace(targetPath) == "" {
+		return ListResult{}, fmt.Errorf("target path is required")
+	}
+
+	normalizedLang, err := normalizeListLanguage(lang)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	normalizedType, err := normalizeListSymbolType(symbolType)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	normalizedFormat, err := normalizeOutputFormat(format)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		return ListResult{}, fmt.Errorf("stat target: %w", err)
+	}
+	if !info.IsDir() {
+		return ListResult{}, fmt.Errorf("summary mode requires a directory target: %s", filepath.ToSlash(targetPath))
+	}
+
+	matcher, err := csignore.NewMatcher(targetPath, nil)
+	if err != nil {
+		return ListResult{}, fmt.Errorf("load ignore rules: %w", err)
+	}
+
+	files, err := collectSupportedFilesForList(targetPath, matcher, normalizedLang)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	summary := ListSummaryResult{
+		DirPath: filepath.ToSlash(targetPath),
+		Files:   make([]FileSummary, 0, len(files)),
+	}
+
+	failedFiles := 0
+	for _, path := range files {
+		source, readErr := os.ReadFile(path)
+		if readErr != nil {
+			failedFiles++
+			warning := fmt.Sprintf("warning: failed to summarize symbols in %s: read file: %v", filepath.ToSlash(path), readErr)
+			summary.Warnings = append(summary.Warnings, warning)
+			continue
+		}
+
+		symbols, listErr := listSymbolsFromSource(path, source, normalizedLang, normalizedType)
+		if listErr != nil {
+			failedFiles++
+			warning := fmt.Sprintf("warning: failed to summarize symbols in %s: %v", filepath.ToSlash(path), listErr)
+			summary.Warnings = append(summary.Warnings, warning)
+			continue
+		}
+
+		relativePath, relErr := filepath.Rel(targetPath, path)
+		if relErr != nil {
+			relativePath = path
+		}
+		relativePath = filepath.ToSlash(relativePath)
+
+		lineCount := bytes.Count(source, []byte{'\n'}) + 1
+		symbolCounts := make(map[string]int)
+		for _, symbol := range symbols {
+			symbolCounts[symbol.SymbolType]++
+		}
+
+		summary.Files = append(summary.Files, FileSummary{
+			FilePath:     relativePath,
+			TotalLines:   lineCount,
+			SymbolCounts: symbolCounts,
+		})
+		summary.TotalLines += lineCount
+	}
+
+	if len(summary.Files) == 0 && failedFiles > 0 {
+		return ListResult{}, fmt.Errorf("failed to process any files under %s (%d errors)", targetPath, failedFiles)
+	}
+
+	summary.FileCount = len(summary.Files)
+
+	output, err := renderSummary(summary, normalizedFormat)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	return ListResult{
+		Output:   output,
+		Warnings: summary.Warnings,
+	}, nil
+}
+
 func normalizeListLanguage(language string) (string, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(language))
 	if trimmed == "" {
@@ -215,6 +316,14 @@ func collectSupportedFilesForList(root string, matcher *csignore.Matcher, langua
 }
 
 func listSymbolsFromFile(path string, languageFilter string, symbolType string) ([]ListSymbol, error) {
+	source, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	return listSymbolsFromSource(path, source, languageFilter, symbolType)
+}
+
+func listSymbolsFromSource(path string, source []byte, languageFilter string, symbolType string) ([]ListSymbol, error) {
 	language := languageFilter
 	if language == "" {
 		resolvedLanguage, err := languageForPath(path)
@@ -227,11 +336,6 @@ func listSymbolsFromFile(path string, languageFilter string, symbolType string) 
 	parserLanguage := parserForLanguage(language)
 	if parserLanguage == nil {
 		return nil, fmt.Errorf("unsupported language %q", language)
-	}
-
-	source, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
 	}
 
 	parser := sitter.NewParser()
@@ -557,6 +661,57 @@ func listSymbolInfoForHTML(node *sitter.Node, source []byte) (string, string, bo
 		return name, "element", true
 	default:
 		return "", "", false
+	}
+}
+
+func renderSummary(summary ListSummaryResult, format OutputFormat) (string, error) {
+	switch format {
+	case FormatJSON:
+		payload, err := json.MarshalIndent(summary, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal output: %w", err)
+		}
+		return string(payload), nil
+	case FormatRaw:
+		header := fmt.Sprintf("%s  (%d files, %d lines)", summary.DirPath, summary.FileCount, summary.TotalLines)
+		if len(summary.Files) == 0 {
+			return header, nil
+		}
+
+		maxPathWidth := 0
+		maxLineWidth := 0
+		for _, file := range summary.Files {
+			if len(file.FilePath) > maxPathWidth {
+				maxPathWidth = len(file.FilePath)
+			}
+			lineWidth := len(strconv.Itoa(file.TotalLines))
+			if lineWidth > maxLineWidth {
+				maxLineWidth = lineWidth
+			}
+		}
+
+		lines := make([]string, 0, len(summary.Files))
+		for _, file := range summary.Files {
+			typeNames := make([]string, 0, len(file.SymbolCounts))
+			for symbolType := range file.SymbolCounts {
+				typeNames = append(typeNames, symbolType)
+			}
+			sort.Strings(typeNames)
+
+			countParts := make([]string, 0, len(typeNames))
+			for _, symbolType := range typeNames {
+				countParts = append(countParts, fmt.Sprintf("%s(%d)", symbolType, file.SymbolCounts[symbolType]))
+			}
+
+			line := fmt.Sprintf("  %-*s %*d lines", maxPathWidth, file.FilePath, maxLineWidth, file.TotalLines)
+			if len(countParts) > 0 {
+				line = fmt.Sprintf("%s    %s", line, strings.Join(countParts, " "))
+			}
+			lines = append(lines, line)
+		}
+		return header + "\n\n" + strings.Join(lines, "\n"), nil
+	default:
+		return "", fmt.Errorf("unsupported format %q: expected raw or json", format)
 	}
 }
 

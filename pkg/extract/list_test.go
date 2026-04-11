@@ -217,6 +217,141 @@ func TestListSymbolsDirectoryGuardedFailureWhenAllFilesFail(t *testing.T) {
 	}
 }
 
+func TestListSymbolsSummarySingleFileDirRaw(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	content := "package sample\n\ntype Target struct{}\n\nfunc Top() {}"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+
+	result, err := ListSymbolsSummary(dir, "go", "raw", "")
+	if err != nil {
+		t.Fatalf("ListSymbolsSummary returned error: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", result.Warnings)
+	}
+
+	if !strings.Contains(result.Output, "(1 files, 5 lines)") {
+		t.Fatalf("summary header mismatch: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "sample.go") {
+		t.Fatalf("summary output missing file path: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "function(1) struct(1)") {
+		t.Fatalf("summary output missing type counts: %q", result.Output)
+	}
+}
+
+func TestListSymbolsSummaryMultiFileDirRaw(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.go"), []byte("package fixture\n\nfunc Alpha() {}"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(alpha.go) returned error: %v", err)
+	}
+
+	nested := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "bravo.py"), []byte("def bravo():\n    return 1"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(bravo.py) returned error: %v", err)
+	}
+
+	result, err := ListSymbolsSummary(dir, "", "raw", "")
+	if err != nil {
+		t.Fatalf("ListSymbolsSummary returned error: %v", err)
+	}
+
+	if !strings.Contains(result.Output, "(2 files, 5 lines)") {
+		t.Fatalf("summary header mismatch: %q", result.Output)
+	}
+
+	alphaIdx := strings.Index(result.Output, "alpha.go")
+	bravoIdx := strings.Index(result.Output, "nested/bravo.py")
+	if alphaIdx == -1 || bravoIdx == -1 || alphaIdx >= bravoIdx {
+		t.Fatalf("summary output ordering mismatch: %q", result.Output)
+	}
+}
+
+func TestListSymbolsSummaryJSONFormat(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.go"), []byte("package fixture\n\nfunc Alpha() {}"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(alpha.go) returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beta.py"), []byte("def beta():\n    return 1"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(beta.py) returned error: %v", err)
+	}
+
+	result, err := ListSymbolsSummary(dir, "", "json", "")
+	if err != nil {
+		t.Fatalf("ListSymbolsSummary returned error: %v", err)
+	}
+
+	var payload ListSummaryResult
+	if err := json.Unmarshal([]byte(result.Output), &payload); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v\noutput: %s", err, result.Output)
+	}
+
+	if payload.FileCount != 2 {
+		t.Fatalf("file_count = %d, want 2", payload.FileCount)
+	}
+	if payload.TotalLines != 5 {
+		t.Fatalf("total_lines = %d, want 5", payload.TotalLines)
+	}
+	if len(payload.Files) != 2 {
+		t.Fatalf("files len = %d, want 2", len(payload.Files))
+	}
+	if payload.Files[0].FilePath != "alpha.go" {
+		t.Fatalf("first file_path = %q, want alpha.go", payload.Files[0].FilePath)
+	}
+	if payload.Files[0].SymbolCounts["function"] != 1 {
+		t.Fatalf("alpha.go function count = %d, want 1", payload.Files[0].SymbolCounts["function"])
+	}
+}
+
+func TestListSymbolsSummaryTypeFilterFunctionIncludesMethods(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	content := "package sample\n\ntype Target struct{}\n\nfunc Top() {}\n\nfunc (Target) Method() {}"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+
+	result, err := ListSymbolsSummary(dir, "go", "json", "function")
+	if err != nil {
+		t.Fatalf("ListSymbolsSummary returned error: %v", err)
+	}
+
+	var payload ListSummaryResult
+	if err := json.Unmarshal([]byte(result.Output), &payload); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v\noutput: %s", err, result.Output)
+	}
+	if len(payload.Files) != 1 {
+		t.Fatalf("files len = %d, want 1", len(payload.Files))
+	}
+
+	counts := payload.Files[0].SymbolCounts
+	if counts["function"] != 1 || counts["method"] != 1 {
+		t.Fatalf("symbol_counts = %v, want function=1 method=1", counts)
+	}
+	if _, exists := counts["struct"]; exists {
+		t.Fatalf("symbol_counts unexpectedly contains struct: %v", counts)
+	}
+}
+
+func TestListSymbolsSummaryEmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := ListSymbolsSummary(dir, "", "raw", "")
+	if err == nil {
+		t.Fatal("expected no-supported-files error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no supported files found under") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestListSymbolsRejectsUnsupportedType(t *testing.T) {
 	path := fixturePath("languages", "sample.go")
 

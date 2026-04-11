@@ -38,3 +38,19 @@ type ListResult struct {
 	Output   string
 	Warnings []string
 }
+
+// FileSummary is the summary payload for one file in directory summary mode.
+type FileSummary struct {
+	FilePath     string         `json:"file_path"`
+	TotalLines   int            `json:"total_lines"`
+	SymbolCounts map[string]int `json:"symbol_counts"`
+}
+
+// ListSummaryResult contains aggregated per-file symbol summaries.
+type ListSummaryResult struct {
+	DirPath    string        `json:"dir_path"`
+	FileCount  int           `json:"file_count"`
+	TotalLines int           `json:"total_lines"`
+	Files      []FileSummary `json:"files"`
+	Warnings   []string      `json:"warnings,omitempty"`
+}
