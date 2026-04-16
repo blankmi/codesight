@@ -320,6 +320,10 @@ func (c *DaemonConnector) connectLease(
 		_ = client.Close()
 		return nil, fmt.Errorf("initialize daemon client: %w", err)
 	}
+	if err := PrimeClientWorkspace(ctx, client, workspaceRoot, spec.Language); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("prime daemon client workspace: %w", err)
+	}
 
 	return client, nil
 }

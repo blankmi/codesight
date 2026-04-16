@@ -754,6 +754,10 @@ func startRefsLSPClient(
 		_ = client.Close()
 		return nil, err
 	}
+	if err := lsp.PrimeClientWorkspace(ctx, client, workspaceRoot, spec.Language); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
 
 	return client, nil
 }
