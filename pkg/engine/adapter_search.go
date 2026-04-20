@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	pkg "github.com/blankbytes/codesight/pkg"
+	pkg "codesight/pkg"
 )
 
 // SemanticSearchAdapter wraps pkg.Searcher to implement SearchProvider.

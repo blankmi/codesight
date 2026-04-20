@@ -3,7 +3,7 @@ package lsp
 import (
 	"fmt"
 
-	csignore "github.com/blankbytes/codesight/pkg/ignore"
+	csignore "codesight/pkg/ignore"
 )
 
 func newWorkspaceIgnoreMatcher(workspaceRoot string) (*csignore.Matcher, error) {

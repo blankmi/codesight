@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	extractpkg "github.com/blankbytes/codesight/pkg/extract"
-	"github.com/blankbytes/codesight/pkg/splitter"
+	extractpkg "codesight/pkg/extract"
+	"codesight/pkg/splitter"
 )
 
 // TreeSitterExtractAdapter wraps extract.Extract to implement ExtractProvider.

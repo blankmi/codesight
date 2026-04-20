@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	csignore "github.com/blankbytes/codesight/pkg/ignore"
+	csignore "codesight/pkg/ignore"
 )
 
 // defaultExtensions are file extensions to include by default.

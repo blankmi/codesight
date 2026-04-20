@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/blankbytes/codesight/pkg/splitter"
+	"codesight/pkg/splitter"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 

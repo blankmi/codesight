@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/lsp"
+	"codesight/pkg/lsp"
 )
 
 const (

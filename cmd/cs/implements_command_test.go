@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/blankbytes/codesight/pkg/lsp"
+	"codesight/pkg/lsp"
 )
 
 func TestImplementsCommandRequiresSymbolArgument(t *testing.T) {

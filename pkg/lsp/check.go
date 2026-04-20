@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/splitter"
+	"codesight/pkg/splitter"
 )
 
 const (

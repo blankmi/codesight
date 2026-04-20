@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/blankbytes/codesight/pkg/splitter"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/splitter"
+	"codesight/pkg/vectorstore"
 )
 
 type recordingIndexStore struct {

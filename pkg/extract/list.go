@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	csignore "github.com/blankbytes/codesight/pkg/ignore"
+	csignore "codesight/pkg/ignore"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 

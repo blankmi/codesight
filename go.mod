@@ -1,4 +1,4 @@
-module github.com/blankbytes/codesight
+module codesight
 
 go 1.25.7
 

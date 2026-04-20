@@ -17,14 +17,14 @@ import (
 	"sync"
 	"time"
 
-	pkg "github.com/blankbytes/codesight/pkg"
-	configpkg "github.com/blankbytes/codesight/pkg/config"
-	"github.com/blankbytes/codesight/pkg/embedding"
-	extractpkg "github.com/blankbytes/codesight/pkg/extract"
-	csignore "github.com/blankbytes/codesight/pkg/ignore"
-	"github.com/blankbytes/codesight/pkg/lsp"
-	"github.com/blankbytes/codesight/pkg/splitter"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	pkg "codesight/pkg"
+	configpkg "codesight/pkg/config"
+	"codesight/pkg/embedding"
+	extractpkg "codesight/pkg/extract"
+	csignore "codesight/pkg/ignore"
+	"codesight/pkg/lsp"
+	"codesight/pkg/splitter"
+	"codesight/pkg/vectorstore"
 	"github.com/spf13/cobra"
 )
 

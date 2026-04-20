@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	pkg "github.com/blankbytes/codesight/pkg"
-	"github.com/blankbytes/codesight/pkg/engine"
-	"github.com/blankbytes/codesight/pkg/lsp"
+	pkg "codesight/pkg"
+	"codesight/pkg/engine"
+	"codesight/pkg/lsp"
 	"github.com/spf13/cobra"
 )
 

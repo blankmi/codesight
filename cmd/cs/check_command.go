@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	csignore "github.com/blankbytes/codesight/pkg/ignore"
-	"github.com/blankbytes/codesight/pkg/lsp"
-	"github.com/blankbytes/codesight/pkg/splitter"
+	csignore "codesight/pkg/ignore"
+	"codesight/pkg/lsp"
+	"codesight/pkg/splitter"
 	"github.com/spf13/cobra"
 )
 

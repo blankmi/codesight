@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	pkg "github.com/blankbytes/codesight/pkg"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	pkg "codesight/pkg"
+	"codesight/pkg/vectorstore"
 )
 
 type recordingSearchStore struct {

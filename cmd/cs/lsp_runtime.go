@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	configpkg "github.com/blankbytes/codesight/pkg/config"
-	"github.com/blankbytes/codesight/pkg/lsp"
+	configpkg "codesight/pkg/config"
+	"codesight/pkg/lsp"
 )
 
 type lspDaemonConnector interface {
@@ -31,7 +31,7 @@ var (
 
 	lspRuntimeGOOS               = runtime.GOOS
 	lspRuntimeNewDaemonConnector func(registry *lsp.Registry) lspDaemonConnector
-	lspRuntimeLegacyStarter = startRefsLSPClient
+	lspRuntimeLegacyStarter      = startRefsLSPClient
 )
 
 type lspCommandRuntime struct {

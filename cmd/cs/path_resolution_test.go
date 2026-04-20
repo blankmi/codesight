@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/blankbytes/codesight/pkg/lsp"
+	"codesight/pkg/lsp"
 )
 
 func TestResolveCommandTargetDirDefaultsToWorkingDirectory(t *testing.T) {

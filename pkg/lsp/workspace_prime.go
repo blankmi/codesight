@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/blankbytes/codesight/pkg/splitter"
+	"codesight/pkg/splitter"
 )
 
 type workspacePrimeClient interface {
@@ -119,8 +119,6 @@ func workspacePrimeLanguageMatches(target, candidate string) bool {
 		return candidate == "typescript" || candidate == "tsx"
 	case "javascript":
 		return candidate == "javascript" || candidate == "jsx"
-	default:
-		return normalizeLanguage(candidate) == normalizeLanguage(target)
 	default:
 		return normalizeLanguage(candidate) == normalizeLanguage(target)
 	}

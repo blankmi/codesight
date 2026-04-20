@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/embedding"
-	"github.com/blankbytes/codesight/pkg/splitter"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/embedding"
+	"codesight/pkg/splitter"
+	"codesight/pkg/vectorstore"
 )
 
 const embeddingBatchSize = 64

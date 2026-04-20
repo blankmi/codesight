@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/vectorstore"
 )
 
 type stubSearchStore struct {

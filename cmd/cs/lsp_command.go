@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	configpkg "github.com/blankbytes/codesight/pkg/config"
-	"github.com/blankbytes/codesight/pkg/lsp"
+	configpkg "codesight/pkg/config"
+	"codesight/pkg/lsp"
 	"github.com/spf13/cobra"
 )
 

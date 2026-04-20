@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/vectorstore"
 )
 
 // CollectionName returns a deterministic collection name for a project path.

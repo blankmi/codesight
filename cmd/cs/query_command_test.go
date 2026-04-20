@@ -3,10 +3,10 @@ package main
 import (
 	"testing"
 
-	"github.com/blankbytes/codesight/pkg"
-	configpkg "github.com/blankbytes/codesight/pkg/config"
-	"github.com/blankbytes/codesight/pkg/engine"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg"
+	configpkg "codesight/pkg/config"
+	"codesight/pkg/engine"
+	"codesight/pkg/vectorstore"
 )
 
 func TestNewQuerySemanticSearchAdapterUsesConfiguredCollectionName(t *testing.T) {

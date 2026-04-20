@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/blankbytes/codesight/pkg/embedding"
-	csignore "github.com/blankbytes/codesight/pkg/ignore"
-	"github.com/blankbytes/codesight/pkg/splitter"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/embedding"
+	csignore "codesight/pkg/ignore"
+	"codesight/pkg/splitter"
+	"codesight/pkg/vectorstore"
 )
 
 // SearchOptions configures a search query.

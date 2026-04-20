@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/splitter"
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/splitter"
+	"codesight/pkg/vectorstore"
 )
 
 const integrationDBAddressEnv = "CODESIGHT_INTEGRATION_DB_ADDRESS"

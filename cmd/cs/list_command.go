@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	extractpkg "github.com/blankbytes/codesight/pkg/extract"
+	extractpkg "codesight/pkg/extract"
 	"github.com/spf13/cobra"
 )
 

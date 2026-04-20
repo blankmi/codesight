@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 
-	"github.com/blankbytes/codesight/pkg/lsp"
+	"codesight/pkg/lsp"
 )
 
 // LSPCallersAdapter wraps lsp.CallersEngine to implement CallersProvider.

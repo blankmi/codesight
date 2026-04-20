@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/vectorstore"
+	"codesight/pkg/vectorstore"
 )
 
 func TestCollectionName_Deterministic(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	configpkg "github.com/blankbytes/codesight/pkg/config"
+	configpkg "codesight/pkg/config"
 	"github.com/spf13/cobra"
 )
 

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blankbytes/codesight/pkg/lsp"
+	"codesight/pkg/lsp"
 )
 
 func TestWarmupCommandSuccessOutputContract(t *testing.T) {

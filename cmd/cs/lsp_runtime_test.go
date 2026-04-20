@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	configpkg "github.com/blankbytes/codesight/pkg/config"
-	"github.com/blankbytes/codesight/pkg/lsp"
+	configpkg "codesight/pkg/config"
+	"codesight/pkg/lsp"
 )
 
 const (
