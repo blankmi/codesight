@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	daemonFakeLSPHelperArg      = "codesight-lsp-daemon-fake-lsp"
-	daemonShutdownLogPathEnvVar = "CODESIGHT_LSP_DAEMON_TEST_SHUTDOWN_LOG"
-	daemonInitLogPathEnvVar     = "CODESIGHT_LSP_DAEMON_TEST_INIT_LOG"
+	daemonFakeLSPHelperArg       = "codesight-lsp-daemon-fake-lsp"
+	daemonShutdownLogPathEnvVar  = "CODESIGHT_LSP_DAEMON_TEST_SHUTDOWN_LOG"
+	daemonInitLogPathEnvVar      = "CODESIGHT_LSP_DAEMON_TEST_INIT_LOG"
+	daemonServerEnvLogPathEnvVar = "CODESIGHT_LSP_DAEMON_TEST_SERVER_ENV_LOG"
 )
 
 func TestDaemonProcessConfigValidateIdleTimeout(t *testing.T) {
@@ -146,6 +147,53 @@ func TestDaemonProxyRoundTrip(t *testing.T) {
 	}
 	if echoed["message"] != "round-trip" {
 		t.Fatalf("echoed message = %q, want %q", echoed["message"], "round-trip")
+	}
+}
+
+func TestDaemonPassesServerEnvToLanguageServer(t *testing.T) {
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable returned error: %v", err)
+	}
+	stateDir, err := os.MkdirTemp("", "cslsp-state-")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(stateDir)
+	})
+	envLogPath := filepath.Join(t.TempDir(), "server-env.log")
+	t.Setenv(daemonServerEnvLogPathEnvVar, envLogPath)
+
+	registry := NewRegistryFromEntries(map[string]ServerSpec{
+		"go": {
+			Language:    "go",
+			Binary:      testBinary,
+			Args:        []string{"-test.run=TestDaemonFakeLanguageServerProcess", "--", daemonFakeLSPHelperArg},
+			InstallHint: "test helper process",
+		},
+	})
+	lifecycle := NewLifecycle(
+		registry,
+		WithStateDirResolver(func() (string, error) {
+			return stateDir, nil
+		}),
+		WithServerEnvResolver(func(ServerSpec) []string {
+			return []string{"JAVA_HOME=/opt/jdks/jdk-21"}
+		}),
+	)
+	workspace := t.TempDir()
+
+	if _, err := lifecycle.Ensure(context.Background(), workspace, "go"); err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
+
+	if !waitForFileContaining(envLogPath, "JAVA_HOME=/opt/jdks/jdk-21", 2*time.Second) {
+		data, _ := os.ReadFile(envLogPath)
+		t.Fatalf("server env log = %q, want JAVA_HOME override", string(data))
 	}
 }
 
@@ -402,6 +450,8 @@ func TestDaemonFakeLanguageServerProcess(t *testing.T) {
 	writer := bufio.NewWriter(os.Stdout)
 	shutdownLogPath := strings.TrimSpace(os.Getenv(daemonShutdownLogPathEnvVar))
 	initLogPath := strings.TrimSpace(os.Getenv(daemonInitLogPathEnvVar))
+	serverEnvLogPath := strings.TrimSpace(os.Getenv(daemonServerEnvLogPathEnvVar))
+	appendDaemonShutdownLog(serverEnvLogPath, "JAVA_HOME="+os.Getenv("JAVA_HOME"))
 
 	for {
 		payload, err := readLSPMessage(reader)
@@ -866,6 +916,18 @@ func appendDaemonShutdownLog(path, event string) {
 	}()
 
 	_, _ = file.WriteString(event + "\n")
+}
+
+func waitForFileContaining(path, needle string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), needle) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 type daemonTestConn struct {

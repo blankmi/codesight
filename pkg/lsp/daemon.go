@@ -30,6 +30,7 @@ type daemonProcessConfig struct {
 	SocketPath              string                   `json:"socket_path"`
 	Binary                  string                   `json:"binary"`
 	Args                    []string                 `json:"args"`
+	ServerEnv               []string                 `json:"server_env,omitempty"`
 	IdleTimeoutNS           int64                    `json:"idle_timeout_ns"`
 	JavaGradleBuildBaseline *JavaGradleBuildBaseline `json:"java_gradle_build_baseline,omitempty"`
 }

@@ -37,6 +37,7 @@ type lifecycleState struct {
 	PID                     int                      `json:"pid"`
 	Binary                  string                   `json:"binary"`
 	Args                    []string                 `json:"args"`
+	ServerEnv               []string                 `json:"server_env,omitempty"`
 	DaemonProcessStartID    string                   `json:"daemon_process_start_id,omitempty"`
 	StartedUnixNano         int64                    `json:"started_unix_nano"`
 	LastUsedUnixNano        int64                    `json:"last_used_unix_nano"`
@@ -54,6 +55,7 @@ func readStateFile(path string) (lifecycleState, error) {
 	}
 	state.StateKey = normalizeStateKey(path, state.StateKey)
 	state.SocketPath = normalizeSocketPath(path, state.StateKey)
+	state.ServerEnv = normalizeEnvOverrides(state.ServerEnv)
 	state.DaemonProcessStartID = strings.TrimSpace(state.DaemonProcessStartID)
 	if state.JavaGradleBuildBaseline != nil {
 		normalized := normalizeJavaGradleBuildBaseline(*state.JavaGradleBuildBaseline)
@@ -65,6 +67,7 @@ func readStateFile(path string) (lifecycleState, error) {
 func writeStateFile(path string, state lifecycleState) error {
 	state.StateKey = normalizeStateKey(path, state.StateKey)
 	state.SocketPath = normalizeSocketPath(path, state.StateKey)
+	state.ServerEnv = normalizeEnvOverrides(state.ServerEnv)
 	state.DaemonProcessStartID = strings.TrimSpace(state.DaemonProcessStartID)
 	if state.JavaGradleBuildBaseline != nil {
 		normalized := normalizeJavaGradleBuildBaseline(*state.JavaGradleBuildBaseline)
@@ -125,6 +128,65 @@ func normalizeStateKey(statePath, persistedStateKey string) string {
 func stateKeyFromStatePath(path string) string {
 	filename := filepath.Base(path)
 	return strings.TrimSuffix(filename, filepath.Ext(filename))
+}
+
+func normalizeEnvOverrides(env []string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+
+	byName := map[string]string{}
+	for _, entry := range env {
+		name, _, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		byName[name] = name + "=" + strings.TrimPrefix(strings.TrimSpace(entry), name+"=")
+	}
+	if len(byName) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	normalized := make([]string, 0, len(names))
+	for _, name := range names {
+		normalized = append(normalized, byName[name])
+	}
+	return normalized
+}
+
+func mergeEnvOverrides(base []string, overrides []string) []string {
+	normalizedOverrides := normalizeEnvOverrides(overrides)
+	if len(normalizedOverrides) == 0 {
+		return append([]string(nil), base...)
+	}
+
+	overrideNames := map[string]struct{}{}
+	for _, entry := range normalizedOverrides {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			overrideNames[name] = struct{}{}
+		}
+	}
+
+	merged := make([]string, 0, len(base)+len(normalizedOverrides))
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, overridden := overrideNames[name]; overridden {
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	merged = append(merged, normalizedOverrides...)
+	return merged
 }
 
 func ReadJavaGradleBuildBaseline(workspaceRoot string) (JavaGradleBuildBaseline, error) {

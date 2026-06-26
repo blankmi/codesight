@@ -774,6 +774,9 @@ func startRefsLSPTransport(ctx context.Context, spec lsp.ServerSpec, workspaceRo
 	}
 
 	cmd := exec.CommandContext(ctx, spec.Binary, args...)
+	if serverEnv := refsLSPServerEnv(spec); len(serverEnv) > 0 {
+		cmd.Env = mergeProcessEnv(os.Environ(), serverEnv)
+	}
 	cmd.Stderr = io.Discard
 
 	stdin, err := cmd.StdinPipe()

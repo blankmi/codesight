@@ -29,6 +29,7 @@ const (
 	envMaxInputChars         = "CODESIGHT_OLLAMA_MAX_INPUT_CHARS"
 	envStateDir              = "CODESIGHT_STATE_DIR"
 	envGradleJavaHome        = "CODESIGHT_GRADLE_JAVA_HOME"
+	envLSPJavaRuntimeHome    = "CODESIGHT_LSP_JAVA_RUNTIME_HOME"
 	envLSPDaemonTimeout      = "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT"
 	envLSPWarmupProbeTimeout = "CODESIGHT_LSP_DAEMON_WARMUP_PROBE_TIMEOUT"
 	envProjectRoot           = "CODESIGHT_PROJECT_ROOT"
@@ -50,6 +51,7 @@ const (
 	keyEmbeddingMaxInput     = "embedding.max_input_chars"
 	keyStateDir              = "state_dir"
 	keyLSPJavaGradleHome     = "lsp.java.gradle_java_home"
+	keyLSPJavaRuntimeHome    = "lsp.java.runtime_java_home"
 	keyLSPJavaTimeout        = "lsp.java.timeout"
 	keyLSPJavaArgs           = "lsp.java.args"
 	keyLSPGoBuildFlags       = "lsp.go.build_flags"
@@ -92,9 +94,10 @@ type LSPConfig struct {
 }
 
 type JavaLSPConfig struct {
-	GradleJavaHome string   `toml:"gradle_java_home"`
-	Timeout        string   `toml:"timeout"`
-	Args           []string `toml:"args"`
+	GradleJavaHome  string   `toml:"gradle_java_home"`
+	RuntimeJavaHome string   `toml:"runtime_java_home"`
+	Timeout         string   `toml:"timeout"`
+	Args            []string `toml:"args"`
 }
 
 type GoLSPConfig struct {
@@ -139,9 +142,10 @@ type layerLSPConfig struct {
 }
 
 type layerJavaLSPConfig struct {
-	GradleJavaHome *string   `toml:"gradle_java_home"`
-	Timeout        *string   `toml:"timeout"`
-	Args           *[]string `toml:"args"`
+	GradleJavaHome  *string   `toml:"gradle_java_home"`
+	RuntimeJavaHome *string   `toml:"runtime_java_home"`
+	Timeout         *string   `toml:"timeout"`
+	Args            *[]string `toml:"args"`
 }
 
 type layerGoLSPConfig struct {
@@ -173,9 +177,10 @@ func Defaults() *Config {
 		StateDir: "",
 		LSP: LSPConfig{
 			Java: JavaLSPConfig{
-				GradleJavaHome: "",
-				Timeout:        defaultJavaTimeout,
-				Args:           []string{},
+				GradleJavaHome:  "",
+				RuntimeJavaHome: "",
+				Timeout:         defaultJavaTimeout,
+				Args:            []string{},
 			},
 			Go: GoLSPConfig{
 				BuildFlags: []string{},
@@ -435,6 +440,10 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 		cfg.LSP.Java.GradleJavaHome = *layer.LSP.Java.GradleJavaHome
 		cfg.Provenance[keyLSPJavaGradleHome] = source
 	}
+	if layer.LSP.Java.RuntimeJavaHome != nil {
+		cfg.LSP.Java.RuntimeJavaHome = *layer.LSP.Java.RuntimeJavaHome
+		cfg.Provenance[keyLSPJavaRuntimeHome] = source
+	}
 	if layer.LSP.Java.Timeout != nil {
 		if _, err := time.ParseDuration(*layer.LSP.Java.Timeout); err != nil {
 			return fmt.Errorf("invalid lsp.java.timeout %q: %w", *layer.LSP.Java.Timeout, err)
@@ -526,6 +535,10 @@ func applyEnv(cfg *Config) error {
 		cfg.LSP.Java.GradleJavaHome = value
 		cfg.Provenance[keyLSPJavaGradleHome] = envGradleJavaHome
 	}
+	if value, ok := os.LookupEnv(envLSPJavaRuntimeHome); ok {
+		cfg.LSP.Java.RuntimeJavaHome = value
+		cfg.Provenance[keyLSPJavaRuntimeHome] = envLSPJavaRuntimeHome
+	}
 	if raw, ok := os.LookupEnv(envLSPDaemonTimeout); ok {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed != "" {
@@ -576,6 +589,7 @@ func allConfigKeys() []string {
 		keyEmbeddingMaxInput,
 		keyStateDir,
 		keyLSPJavaGradleHome,
+		keyLSPJavaRuntimeHome,
 		keyLSPJavaTimeout,
 		keyLSPJavaArgs,
 		keyLSPGoBuildFlags,

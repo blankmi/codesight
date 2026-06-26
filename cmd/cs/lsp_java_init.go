@@ -8,6 +8,7 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	configpkg "codesight/pkg/config"
@@ -33,6 +34,7 @@ func init() {
 				lsp.NewLifecycle(
 					registry,
 					lsp.WithIdleTimeout(resolvedLSPDaemonIdleTimeout(currentConfig())),
+					lsp.WithServerEnvResolver(refsLSPServerEnv),
 				),
 			),
 			lsp.WithDaemonConnectorInitializeParamsBuilder(refsInitializeParams),
@@ -56,6 +58,84 @@ func jdtlsInitOptionsForWorkspace(workspaceRoot string, cfg *configpkg.Config) (
 	}
 
 	return buildJDTLSInitOptions(gradleJavaHome, true), nil
+}
+
+func refsLSPServerEnv(spec lsp.ServerSpec) []string {
+	return javaLSPServerEnv(spec, currentConfig())
+}
+
+func javaLSPServerEnv(spec lsp.ServerSpec, cfg *configpkg.Config) []string {
+	if !strings.EqualFold(strings.TrimSpace(spec.Binary), "jdtls") {
+		return nil
+	}
+	if cfg == nil {
+		return nil
+	}
+	runtimeJavaHome := strings.TrimSpace(cfg.LSP.Java.RuntimeJavaHome)
+	if runtimeJavaHome == "" {
+		return nil
+	}
+	return []string{"JAVA_HOME=" + runtimeJavaHome}
+}
+
+func mergeProcessEnv(base []string, overrides []string) []string {
+	normalizedOverrides := normalizeProcessEnvOverrides(overrides)
+	if len(normalizedOverrides) == 0 {
+		return append([]string(nil), base...)
+	}
+
+	overrideNames := map[string]struct{}{}
+	for _, entry := range normalizedOverrides {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			overrideNames[name] = struct{}{}
+		}
+	}
+
+	merged := make([]string, 0, len(base)+len(normalizedOverrides))
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, overridden := overrideNames[name]; overridden {
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	merged = append(merged, normalizedOverrides...)
+	return merged
+}
+
+func normalizeProcessEnvOverrides(env []string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+
+	byName := map[string]string{}
+	for _, entry := range env {
+		trimmed := strings.TrimSpace(entry)
+		name, value, ok := strings.Cut(trimmed, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		byName[name] = name + "=" + value
+	}
+	if len(byName) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	normalized := make([]string, 0, len(names))
+	for _, name := range names {
+		normalized = append(normalized, byName[name])
+	}
+	return normalized
 }
 
 func shouldSuppressJDTLSGradleImport(workspaceRoot string) (bool, error) {

@@ -24,21 +24,22 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 
 	entries := parseConfigOutput(t, stdout)
 	want := map[string]configOutputEntry{
-		"db.address":                {Value: "localhost:19530", Source: "default"},
-		"db.collection_name":        {Value: "", Source: "default"},
-		"db.token":                  {Value: "", Source: "default"},
-		"db.type":                   {Value: "milvus", Source: "default"},
-		"embedding.max_input_chars": {Value: "0", Source: "default"},
-		"embedding.model":           {Value: "bge-m3", Source: "default"},
-		"embedding.ollama_host":     {Value: "http://127.0.0.1:11434", Source: "default"},
-		"index.warm_lsp":            {Value: "false", Source: "default"},
-		"lsp.daemon.idle_timeout":   {Value: "10m", Source: "default"},
-		"lsp.go.build_flags":        {Value: "", Source: "default"},
-		"lsp.java.args":             {Value: "", Source: "default"},
-		"lsp.java.gradle_java_home": {Value: "", Source: "default"},
-		"lsp.java.timeout":          {Value: "60s", Source: "default"},
-		"project_root":              {Value: resolvedProjectDir, Source: "default"},
-		"state_dir":                 {Value: "", Source: "default"},
+		"db.address":                 {Value: "localhost:19530", Source: "default"},
+		"db.collection_name":         {Value: "", Source: "default"},
+		"db.token":                   {Value: "", Source: "default"},
+		"db.type":                    {Value: "milvus", Source: "default"},
+		"embedding.max_input_chars":  {Value: "0", Source: "default"},
+		"embedding.model":            {Value: "bge-m3", Source: "default"},
+		"embedding.ollama_host":      {Value: "http://127.0.0.1:11434", Source: "default"},
+		"index.warm_lsp":             {Value: "false", Source: "default"},
+		"lsp.daemon.idle_timeout":    {Value: "10m", Source: "default"},
+		"lsp.go.build_flags":         {Value: "", Source: "default"},
+		"lsp.java.args":              {Value: "", Source: "default"},
+		"lsp.java.gradle_java_home":  {Value: "", Source: "default"},
+		"lsp.java.runtime_java_home": {Value: "", Source: "default"},
+		"lsp.java.timeout":           {Value: "60s", Source: "default"},
+		"project_root":               {Value: resolvedProjectDir, Source: "default"},
+		"state_dir":                  {Value: "", Source: "default"},
 	}
 
 	if len(entries) != len(want) {
@@ -97,6 +98,7 @@ func TestConfig_WithEnvOverride(t *testing.T) {
 	clearTestEnv(t)
 	t.Setenv("CODESIGHT_DB_COLLECTION_NAME", "env-shared")
 	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model")
+	t.Setenv("CODESIGHT_LSP_JAVA_RUNTIME_HOME", "/opt/jdks/jdk-21")
 	t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "40s")
 
 	projectDir := t.TempDir()
@@ -115,6 +117,9 @@ func TestConfig_WithEnvOverride(t *testing.T) {
 	}
 	if got := entries["lsp.daemon.idle_timeout"]; got.Value != "40s" || got.Source != "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT" {
 		t.Fatalf("lsp.daemon.idle_timeout = %#v, want value 40s with source CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", got)
+	}
+	if got := entries["lsp.java.runtime_java_home"]; got.Value != "/opt/jdks/jdk-21" || got.Source != "CODESIGHT_LSP_JAVA_RUNTIME_HOME" {
+		t.Fatalf("lsp.java.runtime_java_home = %#v, want value /opt/jdks/jdk-21 with source CODESIGHT_LSP_JAVA_RUNTIME_HOME", got)
 	}
 }
 

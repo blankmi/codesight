@@ -238,7 +238,7 @@ func runDaemon(config daemonProcessConfig) error {
 
 	serverCmd := exec.Command(config.Binary, config.Args...)
 	serverCmd.Dir = config.WorkspaceRoot
-	serverCmd.Env = scrubInternalDaemonEnv(os.Environ())
+	serverCmd.Env = mergeEnvOverrides(scrubInternalDaemonEnv(os.Environ()), config.ServerEnv)
 	serverStdin, err := serverCmd.StdinPipe()
 	if err != nil {
 		_ = listener.Close()

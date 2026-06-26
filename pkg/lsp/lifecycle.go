@@ -42,8 +42,9 @@ type Lease struct {
 type Lifecycle struct {
 	registry *Registry
 
-	idleTimeout      time.Duration
-	stateDirResolver func() (string, error)
+	idleTimeout       time.Duration
+	stateDirResolver  func() (string, error)
+	serverEnvResolver func(ServerSpec) []string
 
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex
@@ -69,6 +70,15 @@ func WithStateDirResolver(resolver func() (string, error)) LifecycleOption {
 	return func(l *Lifecycle) {
 		if resolver != nil {
 			l.stateDirResolver = resolver
+		}
+	}
+}
+
+// WithServerEnvResolver provides language-server process environment overrides.
+func WithServerEnvResolver(resolver func(ServerSpec) []string) LifecycleOption {
+	return func(l *Lifecycle) {
+		if resolver != nil {
+			l.serverEnvResolver = resolver
 		}
 	}
 }
@@ -242,6 +252,7 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 	if err != nil {
 		return Lease{}, err
 	}
+	desiredServerEnv := l.serverEnv(spec)
 
 	stateKey := StateKey(canonicalRoot, spec.Language)
 	lock := l.lockForKey(stateKey)
@@ -260,7 +271,9 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 	now := time.Now()
 	state, stateErr := readStateFile(statePath)
 	if stateErr == nil {
-		if l.isIdle(state, now) {
+		if !sameStringSlice(state.ServerEnv, desiredServerEnv) {
+			_ = l.stopStateProcess(statePath, state)
+		} else if l.isIdle(state, now) {
 			_ = l.stopStateProcess(statePath, state)
 		} else {
 			if hasStrongProcessIdentity(state) {
@@ -327,6 +340,7 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 		SocketPath:    socketPath,
 		Binary:        spec.Binary,
 		Args:          args,
+		ServerEnv:     desiredServerEnv,
 		IdleTimeoutNS: int64(l.idleTimeout),
 	}
 	pid, daemonProcessStartID, err := launchDaemonProcess(ctx, daemonConfig)
@@ -342,6 +356,7 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 		PID:                  pid,
 		Binary:               spec.Binary,
 		Args:                 append([]string(nil), spec.Args...),
+		ServerEnv:            desiredServerEnv,
 		DaemonProcessStartID: strings.TrimSpace(daemonProcessStartID),
 		StartedUnixNano:      now.UnixNano(),
 		LastUsedUnixNano:     now.UnixNano(),
@@ -594,6 +609,25 @@ func (l *Lifecycle) lockForKey(stateKey string) *sync.Mutex {
 	lock = &sync.Mutex{}
 	l.locks[stateKey] = lock
 	return lock
+}
+
+func (l *Lifecycle) serverEnv(spec ServerSpec) []string {
+	if l == nil || l.serverEnvResolver == nil {
+		return nil
+	}
+	return normalizeEnvOverrides(l.serverEnvResolver(spec))
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func leaseFromState(state lifecycleState, reused bool) Lease {

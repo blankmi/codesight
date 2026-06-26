@@ -50,6 +50,9 @@ func TestInit_JavaProjectDetected(t *testing.T) {
 	if !strings.Contains(configContent, `gradle_java_home = ""`) {
 		t.Fatalf("config missing gradle_java_home placeholder:\n%s", configContent)
 	}
+	if !strings.Contains(configContent, `runtime_java_home = ""`) {
+		t.Fatalf("config missing runtime_java_home placeholder:\n%s", configContent)
+	}
 }
 
 func TestInit_GoProjectDetected(t *testing.T) {

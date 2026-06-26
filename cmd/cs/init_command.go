@@ -145,6 +145,8 @@ func renderInitConfigTemplate(detected projectTypeDetection) string {
 
 	if detected.java {
 		b.WriteString("\n[lsp.java]\n")
+		b.WriteString("# Optional JDK home used to run jdtls itself (Java 21+ may be required).\n")
+		b.WriteString("runtime_java_home = \"\"\n")
 		b.WriteString("# Optional JDK home used for Gradle import/build tooling.\n")
 		b.WriteString("gradle_java_home = \"\"\n")
 	}

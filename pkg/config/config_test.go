@@ -40,6 +40,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.LSP.Java.GradleJavaHome != "" {
 		t.Fatalf("LSP.Java.GradleJavaHome = %q, want empty", cfg.LSP.Java.GradleJavaHome)
 	}
+	if cfg.LSP.Java.RuntimeJavaHome != "" {
+		t.Fatalf("LSP.Java.RuntimeJavaHome = %q, want empty", cfg.LSP.Java.RuntimeJavaHome)
+	}
 	if cfg.LSP.Java.Timeout != "60s" {
 		t.Fatalf("LSP.Java.Timeout = %q, want %q", cfg.LSP.Java.Timeout, "60s")
 	}
@@ -203,7 +206,8 @@ model = "project-model"
 	t.Setenv("CODESIGHT_EMBEDDING_MODEL", "env-model")
 	t.Setenv("CODESIGHT_OLLAMA_MAX_INPUT_CHARS", "8192")
 	t.Setenv("CODESIGHT_STATE_DIR", "/tmp/codesight-state")
-	t.Setenv("CODESIGHT_GRADLE_JAVA_HOME", "/usr/lib/jvm/java-21")
+	t.Setenv("CODESIGHT_GRADLE_JAVA_HOME", "/usr/lib/jvm/java-17")
+	t.Setenv("CODESIGHT_LSP_JAVA_RUNTIME_HOME", "/usr/lib/jvm/java-21")
 	t.Setenv("CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", "45s")
 
 	cfg, err := LoadConfig(projectDir)
@@ -235,8 +239,11 @@ model = "project-model"
 	if cfg.StateDir != "/tmp/codesight-state" {
 		t.Fatalf("StateDir = %q, want env override", cfg.StateDir)
 	}
-	if cfg.LSP.Java.GradleJavaHome != "/usr/lib/jvm/java-21" {
+	if cfg.LSP.Java.GradleJavaHome != "/usr/lib/jvm/java-17" {
 		t.Fatalf("LSP.Java.GradleJavaHome = %q, want env override", cfg.LSP.Java.GradleJavaHome)
+	}
+	if cfg.LSP.Java.RuntimeJavaHome != "/usr/lib/jvm/java-21" {
+		t.Fatalf("LSP.Java.RuntimeJavaHome = %q, want env override", cfg.LSP.Java.RuntimeJavaHome)
 	}
 	if cfg.LSP.Daemon.IdleTimeout != "45s" {
 		t.Fatalf("LSP.Daemon.IdleTimeout = %q, want env override", cfg.LSP.Daemon.IdleTimeout)
@@ -256,6 +263,9 @@ model = "project-model"
 	}
 	if cfg.Provenance[keyLSPDaemonTimeout] != "CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT" {
 		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_LSP_DAEMON_IDLE_TIMEOUT", keyLSPDaemonTimeout, cfg.Provenance[keyLSPDaemonTimeout])
+	}
+	if cfg.Provenance[keyLSPJavaRuntimeHome] != "CODESIGHT_LSP_JAVA_RUNTIME_HOME" {
+		t.Fatalf("Provenance[%q] = %q, want CODESIGHT_LSP_JAVA_RUNTIME_HOME", keyLSPJavaRuntimeHome, cfg.Provenance[keyLSPJavaRuntimeHome])
 	}
 }
 
@@ -359,6 +369,33 @@ model = "project-model"
 	}
 	if cfg.Embedding.MaxInputChars != 0 {
 		t.Fatalf("Embedding.MaxInputChars = %d, want default 0", cfg.Embedding.MaxInputChars)
+	}
+}
+
+func TestLoadConfig_JavaRuntimeHomeFromProjectConfig(t *testing.T) {
+	_ = setHomeDir(t)
+	projectDir := t.TempDir()
+	clearConfigEnv(t)
+
+	writeFile(t, filepath.Join(projectDir, ".codesight", "config.toml"), `
+[lsp.java]
+runtime_java_home = "/opt/jdks/jdk-21"
+gradle_java_home = "/opt/jdks/jdk-17"
+`)
+
+	cfg, err := LoadConfig(projectDir)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if cfg.LSP.Java.RuntimeJavaHome != "/opt/jdks/jdk-21" {
+		t.Fatalf("LSP.Java.RuntimeJavaHome = %q, want project value", cfg.LSP.Java.RuntimeJavaHome)
+	}
+	if cfg.LSP.Java.GradleJavaHome != "/opt/jdks/jdk-17" {
+		t.Fatalf("LSP.Java.GradleJavaHome = %q, want project value", cfg.LSP.Java.GradleJavaHome)
+	}
+	if cfg.Provenance[keyLSPJavaRuntimeHome] != projectConfigSource {
+		t.Fatalf("Provenance[%q] = %q, want %q", keyLSPJavaRuntimeHome, cfg.Provenance[keyLSPJavaRuntimeHome], projectConfigSource)
 	}
 }
 
@@ -697,6 +734,9 @@ func expectDefaults(t *testing.T, cfg *Config) {
 	if cfg.LSP.Java.GradleJavaHome != defaults.LSP.Java.GradleJavaHome {
 		t.Fatalf("LSP.Java.GradleJavaHome = %q, want %q", cfg.LSP.Java.GradleJavaHome, defaults.LSP.Java.GradleJavaHome)
 	}
+	if cfg.LSP.Java.RuntimeJavaHome != defaults.LSP.Java.RuntimeJavaHome {
+		t.Fatalf("LSP.Java.RuntimeJavaHome = %q, want %q", cfg.LSP.Java.RuntimeJavaHome, defaults.LSP.Java.RuntimeJavaHome)
+	}
 	if cfg.LSP.Java.Timeout != defaults.LSP.Java.Timeout {
 		t.Fatalf("LSP.Java.Timeout = %q, want %q", cfg.LSP.Java.Timeout, defaults.LSP.Java.Timeout)
 	}
@@ -727,6 +767,7 @@ func clearConfigEnv(t *testing.T) {
 		envMaxInputChars,
 		envStateDir,
 		envGradleJavaHome,
+		envLSPJavaRuntimeHome,
 		envLSPDaemonTimeout,
 		envProjectRoot,
 	}

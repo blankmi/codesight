@@ -63,6 +63,7 @@ func buildConfigDisplayEntries(cfg *configpkg.Config, workspaceRoot string) []co
 		{Key: "lsp.go.build_flags", Value: strings.Join(cfg.LSP.Go.BuildFlags, ","), Source: configValueSource(cfg, "lsp.go.build_flags")},
 		{Key: "lsp.java.args", Value: strings.Join(cfg.LSP.Java.Args, ","), Source: configValueSource(cfg, "lsp.java.args")},
 		{Key: "lsp.java.gradle_java_home", Value: cfg.LSP.Java.GradleJavaHome, Source: configValueSource(cfg, "lsp.java.gradle_java_home")},
+		{Key: "lsp.java.runtime_java_home", Value: cfg.LSP.Java.RuntimeJavaHome, Source: configValueSource(cfg, "lsp.java.runtime_java_home")},
 		{Key: "lsp.java.timeout", Value: cfg.LSP.Java.Timeout, Source: configValueSource(cfg, "lsp.java.timeout")},
 		{Key: "project_root", Value: projectRootValue, Source: configValueSource(cfg, "project_root")},
 		{Key: "state_dir", Value: cfg.StateDir, Source: configValueSource(cfg, "state_dir")},

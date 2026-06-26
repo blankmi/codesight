@@ -483,6 +483,85 @@ func TestLifecycleEnsureReuseRefreshesLastUsedTimestamp(t *testing.T) {
 	})
 }
 
+func TestLifecycleRestartsDaemonWhenServerEnvChanges(t *testing.T) {
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable returned error: %v", err)
+	}
+	stateDir, err := os.MkdirTemp("", "cslsp-state-")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(stateDir)
+	})
+	serverEnv := []string{"JAVA_HOME=/opt/jdks/jdk-21"}
+
+	registry := NewRegistryFromEntries(map[string]ServerSpec{
+		"go": {
+			Language:    "go",
+			Binary:      testBinary,
+			Args:        []string{"-test.run=TestLifecycleHelperProcess", "--", lifecycleHelperArg},
+			InstallHint: "test helper process",
+		},
+	})
+	lifecycle := NewLifecycle(
+		registry,
+		WithStateDirResolver(func() (string, error) {
+			return stateDir, nil
+		}),
+		WithServerEnvResolver(func(ServerSpec) []string {
+			return append([]string(nil), serverEnv...)
+		}),
+	)
+	workspace := t.TempDir()
+
+	firstLease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("first Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = lifecycle.Stop(workspace, "go")
+	})
+
+	statePath, err := lifecycle.statePathForKey(firstLease.StateKey)
+	if err != nil {
+		t.Fatalf("statePathForKey returned error: %v", err)
+	}
+	firstState, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile returned error: %v", err)
+	}
+	if len(firstState.ServerEnv) != 1 || firstState.ServerEnv[0] != "JAVA_HOME=/opt/jdks/jdk-21" {
+		t.Fatalf("first state ServerEnv = %#v, want JAVA_HOME override", firstState.ServerEnv)
+	}
+
+	secondLease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("second Ensure returned error: %v", err)
+	}
+	if !secondLease.Reused {
+		t.Fatal("second Ensure should reuse daemon when server env is unchanged")
+	}
+
+	serverEnv = []string{"JAVA_HOME=/opt/jdks/jdk-22"}
+	thirdLease, err := lifecycle.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("third Ensure returned error: %v", err)
+	}
+	if thirdLease.Reused {
+		t.Fatal("third Ensure reused daemon after server env changed")
+	}
+
+	thirdState, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile after env change returned error: %v", err)
+	}
+	if len(thirdState.ServerEnv) != 1 || thirdState.ServerEnv[0] != "JAVA_HOME=/opt/jdks/jdk-22" {
+		t.Fatalf("third state ServerEnv = %#v, want updated JAVA_HOME override", thirdState.ServerEnv)
+	}
+}
+
 func TestLifecycleHelperProcess(t *testing.T) {
 	if !hasArg(lifecycleHelperArg) {
 		return

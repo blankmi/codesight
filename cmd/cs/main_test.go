@@ -628,6 +628,50 @@ func TestJdtlsDataDir_GitignoreNotOverwritten(t *testing.T) {
 	}
 }
 
+func TestStartRefsLSPTransportAppliesRuntimeJavaHomeForJdtls(t *testing.T) {
+	clearTestEnv(t)
+
+	workspace := t.TempDir()
+	t.Setenv("CODESIGHT_STATE_DIR", t.TempDir())
+
+	helperBinDir := t.TempDir()
+	envLogPath := filepath.Join(t.TempDir(), "java-home.log")
+	helperScriptPath := filepath.Join(helperBinDir, "jdtls")
+	helperScript := fmt.Sprintf(
+		"#!/bin/sh\nprintf \"%%s\" \"$JAVA_HOME\" > %q\nwhile IFS= read -r line; do :; done\n",
+		envLogPath,
+	)
+	if err := os.WriteFile(helperScriptPath, []byte(helperScript), 0o700); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+	t.Setenv("PATH", helperBinDir)
+
+	previousRuntimeConfig := runtimeConfig
+	cfg := configpkg.Defaults()
+	cfg.LSP.Java.RuntimeJavaHome = "/opt/jdks/jdk-21"
+	runtimeConfig = cfg
+	t.Cleanup(func() {
+		runtimeConfig = previousRuntimeConfig
+	})
+
+	transport, err := startRefsLSPTransport(context.Background(), lsp.ServerSpec{
+		Language:    "java",
+		Binary:      "jdtls",
+		InstallHint: "test helper process",
+	}, workspace)
+	if err != nil {
+		t.Fatalf("startRefsLSPTransport returned error: %v", err)
+	}
+	defer func() {
+		_ = transport.Close()
+	}()
+
+	if !waitForTestFileContaining(envLogPath, "/opt/jdks/jdk-21", 2*time.Second) {
+		data, _ := os.ReadFile(envLogPath)
+		t.Fatalf("java home log = %q, want runtime java home", string(data))
+	}
+}
+
 func TestJdtlsInitOptionsForWorkspaceFirstLaunchNoSuppression(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("CODESIGHT_STATE_DIR", stateDir)
@@ -849,6 +893,18 @@ func gradleOptions(initOptions map[string]any) (map[string]any, bool) {
 		return nil, false
 	}
 	return gradleOptions, true
+}
+
+func waitForTestFileContaining(path, needle string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), needle) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 func parseOllamaMaxInputCharsOverride() (int, error) {
