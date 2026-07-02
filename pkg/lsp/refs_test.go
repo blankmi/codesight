@@ -580,3 +580,108 @@ func fileURI(path string) DocumentURI {
 	}
 	return DocumentURI("file://" + slashed)
 }
+
+func TestRefsLSPZeroResultsWarnsAboutGrepCandidates(t *testing.T) {
+	root := t.TempDir()
+	service := filepath.Join(root, "Service.java")
+	view := filepath.Join(root, "View.java")
+
+	writeTestFile(t, service, strings.Join([]string{
+		"package demo;",
+		"",
+		"public class Service {",
+		"    public int target() { return 0; }",
+		"}",
+	}, "\n"))
+	writeTestFile(t, view, strings.Join([]string{
+		"package demo;",
+		"import demo.Service;",
+		"",
+		"public class View {",
+		"    int count = service.target();",
+		"}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "target",
+				Kind: SymbolKindMethod,
+				Location: Location{
+					URI: fileURI(service),
+					Range: Range{
+						Start: Position{Line: 3, Character: 15},
+						End:   Position{Line: 3, Character: 21},
+					},
+				},
+			},
+		},
+		references: []Location{},
+	}
+
+	engine := NewRefsEngine(client, nil)
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "target",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	if !strings.Contains(output, "0 references found") {
+		t.Fatalf("output %q missing zero-reference count", output)
+	}
+	if !strings.Contains(output, "Warning: a text search found 1 potential reference(s)") {
+		t.Fatalf("output %q missing cross-check warning", output)
+	}
+	if !strings.Contains(output, "View.java:5") {
+		t.Fatalf("output %q missing grep candidate location", output)
+	}
+	if strings.Contains(output, "Service.java:4") {
+		t.Fatalf("output %q should not list the declaration as a candidate", output)
+	}
+}
+
+func TestRefsLSPZeroResultsWithoutGrepCandidatesStaysQuiet(t *testing.T) {
+	root := t.TempDir()
+	service := filepath.Join(root, "Service.java")
+
+	writeTestFile(t, service, strings.Join([]string{
+		"package demo;",
+		"",
+		"public class Service {",
+		"    public int target() { return 0; }",
+		"}",
+	}, "\n"))
+
+	client := &stubRefsClient{
+		workspaceSymbols: []SymbolInformation{
+			{
+				Name: "target",
+				Kind: SymbolKindMethod,
+				Location: Location{
+					URI: fileURI(service),
+					Range: Range{
+						Start: Position{Line: 3, Character: 15},
+						End:   Position{Line: 3, Character: 21},
+					},
+				},
+			},
+		},
+		references: []Location{},
+	}
+
+	engine := NewRefsEngine(client, nil)
+	output, err := engine.Find(context.Background(), RefsOptions{
+		WorkspaceRoot: root,
+		Symbol:        "target",
+	})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+
+	want := "0 references found"
+	if output != want {
+		t.Fatalf("output = %q, want %q", output, want)
+	}
+}

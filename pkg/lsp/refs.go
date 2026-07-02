@@ -222,7 +222,66 @@ func (e *RefsEngine) findWithLSP(
 		return "", err
 	}
 
-	return formatReferencesOutput(refs, ""), nil
+	output := formatReferencesOutput(refs, "")
+	if len(refs) == 0 {
+		if note := e.zeroRefsCrossCheckNote(ctx, workspaceRoot, symbol, candidates[0]); note != "" {
+			output += "\n" + note
+		}
+	}
+	return output, nil
+}
+
+// zeroRefsCrossCheckNote guards against the language server confidently
+// reporting zero references while lacking project context (e.g. Lombok
+// sources without the agent make jdtls drop method matches as unresolvable).
+// It greps the workspace for the symbol and reports leftover candidates.
+func (e *RefsEngine) zeroRefsCrossCheckNote(
+	ctx context.Context,
+	workspaceRoot string,
+	symbol string,
+	declaration resolvedSymbol,
+) string {
+	if e.fallback == nil {
+		return ""
+	}
+
+	matches, err := e.fallback.Find(ctx, workspaceRoot, symbol)
+	if err != nil {
+		return ""
+	}
+
+	leftover := make([]referenceLine, 0, len(matches))
+	for _, match := range matches {
+		if match.Path == declaration.path && match.Line == declaration.line {
+			continue
+		}
+		if isImportReference(match.Snippet) {
+			continue
+		}
+		leftover = append(leftover, match)
+	}
+	if len(leftover) == 0 {
+		return ""
+	}
+
+	const maxListedCrossCheckMatches = 5
+	lines := make([]string, 0, maxListedCrossCheckMatches+3)
+	lines = append(lines, fmt.Sprintf(
+		"Warning: a text search found %d potential reference(s) the language server did not report:",
+		len(leftover),
+	))
+	for index, match := range leftover {
+		if index == maxListedCrossCheckMatches {
+			lines = append(lines, fmt.Sprintf("  ... and %d more", len(leftover)-maxListedCrossCheckMatches))
+			break
+		}
+		lines = append(lines, fmt.Sprintf("  %s:%d  %s", match.Path, match.Line, normalizeSnippet(match.Snippet)))
+	}
+	lines = append(lines,
+		"If these are real references, the language server may lack project context",
+		`(e.g. Lombok projects need the agent — see the lsp.java.args config key).`,
+	)
+	return strings.Join(lines, "\n")
 }
 
 func (e *RefsEngine) lookupSymbols(ctx context.Context, symbol string) ([]SymbolInformation, error) {
