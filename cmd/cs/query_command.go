@@ -57,7 +57,7 @@ func executeQueryCommand(ctx context.Context, opts queryCommandOptions) (string,
 	targetDir := currentTargetDir()
 	workspaceRoot := resolvedProjectRootForTarget(targetDir)
 
-	registry := lsp.NewRegistry()
+	registry := newLSPRegistry()
 	runtime := newLSPCommandRuntime(registry)
 
 	// Set up LSP client (best-effort — engine degrades gracefully without it).

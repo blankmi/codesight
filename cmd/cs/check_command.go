@@ -64,7 +64,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 }
 
 func executeCheckCommand(ctx context.Context, opts checkCommandOptions) (lsp.CheckResult, error) {
-	registry := lsp.NewRegistry()
+	registry := newLSPRegistry()
 
 	// Group resolved paths by detected language.
 	pathsByLanguage := map[string][]string{}
@@ -127,7 +127,7 @@ func executeCheckCommand(ctx context.Context, opts checkCommandOptions) (lsp.Che
 
 func detectCheckLanguage(workspaceRoot, targetPath string, registry *lsp.Registry) (string, error) {
 	if registry == nil {
-		registry = lsp.NewRegistry()
+		registry = newLSPRegistry()
 	}
 
 	resolvedTarget, err := resolveProjectPath(targetPath)

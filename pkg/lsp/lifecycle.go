@@ -273,6 +273,8 @@ func (l *Lifecycle) Ensure(ctx context.Context, workspaceRoot, language string) 
 	if stateErr == nil {
 		if !sameStringSlice(state.ServerEnv, desiredServerEnv) {
 			_ = l.stopStateProcess(statePath, state)
+		} else if !sameStringSlice(state.Args, spec.Args) {
+			_ = l.stopStateProcess(statePath, state)
 		} else if l.isIdle(state, now) {
 			_ = l.stopStateProcess(statePath, state)
 		} else {

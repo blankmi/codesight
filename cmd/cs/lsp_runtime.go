@@ -34,6 +34,12 @@ var (
 	lspRuntimeLegacyStarter      = startRefsLSPClient
 )
 
+// newLSPRegistry builds the language-server registry with user-configured
+// launch arguments applied (e.g. lsp.java.args for a Lombok javaagent).
+func newLSPRegistry() *lsp.Registry {
+	return lsp.NewRegistry(lsp.WithExtraServerArgs("java", currentConfig().LSP.Java.Args...))
+}
+
 type lspCommandRuntime struct {
 	registry               *lsp.Registry
 	goos                   string
@@ -45,7 +51,7 @@ type lspCommandRuntime struct {
 
 func newLSPCommandRuntime(registry *lsp.Registry) *lspCommandRuntime {
 	if registry == nil {
-		registry = lsp.NewRegistry()
+		registry = newLSPRegistry()
 	}
 
 	return &lspCommandRuntime{
@@ -129,7 +135,7 @@ func (r *lspCommandRuntime) connectClientWithMetadata(
 }
 
 func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, error) {
-	registry := lsp.NewRegistry()
+	registry := newLSPRegistry()
 	runtime := newLSPCommandRuntime(registry)
 
 	fallbackBinary := ""
@@ -184,7 +190,7 @@ func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, e
 }
 
 func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (string, error) {
-	registry := lsp.NewRegistry()
+	registry := newLSPRegistry()
 	runtime := newLSPCommandRuntime(registry)
 
 	// Always use the discovered project root for language detection and daemon connection.
@@ -224,7 +230,7 @@ func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (str
 }
 
 func executeImplementsCommand(ctx context.Context, opts implementsCommandOptions) (string, error) {
-	registry := lsp.NewRegistry()
+	registry := newLSPRegistry()
 	runtime := newLSPCommandRuntime(registry)
 
 	// Always use the discovered project root for language detection and daemon connection.
@@ -303,7 +309,7 @@ func appendRefsColdStartHint(output string) string {
 }
 
 func executeLSPWarmup(ctx context.Context, workspaceRoot, language string, cfg *configpkg.Config) error {
-	registry := lsp.NewRegistry()
+	registry := newLSPRegistry()
 	return executeLSPWarmupWithRegistry(ctx, registry, workspaceRoot, language, cfg)
 }
 
@@ -315,7 +321,7 @@ func executeLSPWarmupWithRegistry(
 	cfg *configpkg.Config,
 ) error {
 	if registry == nil {
-		registry = lsp.NewRegistry()
+		registry = newLSPRegistry()
 	}
 
 	spec, err := registry.Lookup(language)

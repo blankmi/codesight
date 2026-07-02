@@ -22,9 +22,32 @@ type Registry struct {
 	servers map[string]ServerSpec
 }
 
+// RegistryOption customizes the registry built by NewRegistry.
+type RegistryOption func(map[string]ServerSpec)
+
+// WithExtraServerArgs appends launch arguments to one language's server spec.
+// Languages without a default spec are ignored.
+func WithExtraServerArgs(language string, args ...string) RegistryOption {
+	return func(entries map[string]ServerSpec) {
+		key := normalizeLanguage(language)
+		spec, ok := entries[key]
+		if !ok || len(args) == 0 {
+			return
+		}
+		spec.Args = append(append([]string(nil), spec.Args...), args...)
+		entries[key] = spec
+	}
+}
+
 // NewRegistry builds the default language-server mapping used by refs/callers.
-func NewRegistry() *Registry {
-	return NewRegistryFromEntries(defaultRegistryEntries())
+func NewRegistry(opts ...RegistryOption) *Registry {
+	entries := defaultRegistryEntries()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(entries)
+		}
+	}
+	return NewRegistryFromEntries(entries)
 }
 
 // NewRegistryFromEntries builds a registry from explicit entries.

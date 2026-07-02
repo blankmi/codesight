@@ -149,6 +149,9 @@ func renderInitConfigTemplate(detected projectTypeDetection) string {
 		b.WriteString("runtime_java_home = \"\"\n")
 		b.WriteString("# Optional JDK home used for Gradle import/build tooling.\n")
 		b.WriteString("gradle_java_home = \"\"\n")
+		b.WriteString("# Extra jdtls launch arguments. Lombok projects need the agent, otherwise\n")
+		b.WriteString("# cross-file method references silently return 0 results:\n")
+		b.WriteString("# args = [\"--jvm-arg=-javaagent:/path/to/lombok.jar\"]\n")
 	}
 	if detected.goLang {
 		b.WriteString("\n[lsp.go]\n")

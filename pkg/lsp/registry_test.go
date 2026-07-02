@@ -55,3 +55,50 @@ func TestRegistryLookupReturnsIndependentArgsSlice(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistryWithExtraServerArgsAppendsToLanguage(t *testing.T) {
+	registry := NewRegistry(WithExtraServerArgs("java", "--jvm-arg=-javaagent:/tmp/lombok.jar"))
+
+	spec, err := registry.Lookup("java")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if len(spec.Args) != 1 || spec.Args[0] != "--jvm-arg=-javaagent:/tmp/lombok.jar" {
+		t.Fatalf("Args = %#v, want the extra jvm arg appended", spec.Args)
+	}
+
+	tsSpec, err := registry.Lookup("typescript")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if len(tsSpec.Args) != 1 || tsSpec.Args[0] != "--stdio" {
+		t.Fatalf("typescript Args = %#v, want default args untouched", tsSpec.Args)
+	}
+}
+
+func TestRegistryWithExtraServerArgsKeepsDefaultArgsFirst(t *testing.T) {
+	registry := NewRegistry(WithExtraServerArgs("typescript", "--log-level", "4"))
+
+	spec, err := registry.Lookup("typescript")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	want := []string{"--stdio", "--log-level", "4"}
+	if len(spec.Args) != len(want) {
+		t.Fatalf("Args = %#v, want %#v", spec.Args, want)
+	}
+	for i := range want {
+		if spec.Args[i] != want[i] {
+			t.Fatalf("Args = %#v, want %#v", spec.Args, want)
+		}
+	}
+}
+
+func TestRegistryWithExtraServerArgsIgnoresUnknownLanguage(t *testing.T) {
+	registry := NewRegistry(WithExtraServerArgs("elixir", "--foo"))
+
+	_, err := registry.Lookup("elixir")
+	if !errors.Is(err, ErrUnsupportedLanguage) {
+		t.Fatalf("error = %v, expected ErrUnsupportedLanguage", err)
+	}
+}

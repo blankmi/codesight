@@ -25,7 +25,7 @@ var javaGradleTrackedBuildFiles = []string{
 func init() {
 	lspRuntimeNewDaemonConnector = func(registry *lsp.Registry) lspDaemonConnector {
 		if registry == nil {
-			registry = lsp.NewRegistry()
+			registry = newLSPRegistry()
 		}
 
 		return lsp.NewDaemonConnector(

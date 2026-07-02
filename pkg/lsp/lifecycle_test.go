@@ -848,3 +848,78 @@ func TestRemoveStateArtifactsRemovesLogAndBaselineFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecycleRestartsDaemonWhenServerArgsChange(t *testing.T) {
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable returned error: %v", err)
+	}
+	stateDir, err := os.MkdirTemp("", "cslsp-state-")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(stateDir)
+	})
+
+	lifecycleWithArgs := func(extraArgs ...string) *Lifecycle {
+		args := append([]string{"-test.run=TestLifecycleHelperProcess", "--", lifecycleHelperArg}, extraArgs...)
+		registry := NewRegistryFromEntries(map[string]ServerSpec{
+			"go": {
+				Language:    "go",
+				Binary:      testBinary,
+				Args:        args,
+				InstallHint: "test helper process",
+			},
+		})
+		return NewLifecycle(
+			registry,
+			WithStateDirResolver(func() (string, error) {
+				return stateDir, nil
+			}),
+		)
+	}
+
+	workspace := t.TempDir()
+
+	first := lifecycleWithArgs()
+	firstLease, err := first.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("first Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = first.Stop(workspace, "go")
+	})
+
+	secondLease, err := lifecycleWithArgs().Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("second Ensure returned error: %v", err)
+	}
+	if !secondLease.Reused {
+		t.Fatal("second Ensure should reuse daemon when server args are unchanged")
+	}
+
+	changed := lifecycleWithArgs("--extra-flag")
+	thirdLease, err := changed.Ensure(context.Background(), workspace, "go")
+	if err != nil {
+		t.Fatalf("third Ensure returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = changed.Stop(workspace, "go")
+	})
+	if thirdLease.Reused {
+		t.Fatal("third Ensure reused daemon after server args changed")
+	}
+
+	statePath, err := changed.statePathForKey(firstLease.StateKey)
+	if err != nil {
+		t.Fatalf("statePathForKey returned error: %v", err)
+	}
+	thirdState, err := readStateFile(statePath)
+	if err != nil {
+		t.Fatalf("readStateFile after args change returned error: %v", err)
+	}
+	if len(thirdState.Args) == 0 || thirdState.Args[len(thirdState.Args)-1] != "--extra-flag" {
+		t.Fatalf("third state Args = %#v, want trailing --extra-flag", thirdState.Args)
+	}
+}

@@ -285,7 +285,9 @@ build_flags = ["-tags=integration"]
 [lsp.java]
 gradle_java_home = "/path/to/jdk"
 timeout = "90s"
-args = ["-Xms256m", "-Xmx2g"]
+# Extra jdtls launch arguments. Lombok projects need the agent, otherwise
+# generated members are invisible and cross-file method refs return 0 results:
+args = ["--jvm-arg=-javaagent:/path/to/lombok.jar"]
 ```
 
 Notes:

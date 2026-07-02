@@ -228,3 +228,37 @@ func hasLSPRuntimeHelperArg(target string) bool {
 	}
 	return false
 }
+
+func TestNewLSPRegistryAppliesConfiguredJavaArgs(t *testing.T) {
+	previousRuntimeConfig := runtimeConfig
+	cfg := configpkg.Defaults()
+	cfg.LSP.Java.Args = []string{"--jvm-arg=-javaagent:/tmp/lombok.jar"}
+	runtimeConfig = cfg
+	t.Cleanup(func() {
+		runtimeConfig = previousRuntimeConfig
+	})
+
+	spec, err := newLSPRegistry().Lookup("java")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if len(spec.Args) != 1 || spec.Args[0] != "--jvm-arg=-javaagent:/tmp/lombok.jar" {
+		t.Fatalf("java Args = %#v, want configured jvm arg", spec.Args)
+	}
+}
+
+func TestNewLSPRegistryWithoutJavaArgsKeepsDefaults(t *testing.T) {
+	previousRuntimeConfig := runtimeConfig
+	runtimeConfig = configpkg.Defaults()
+	t.Cleanup(func() {
+		runtimeConfig = previousRuntimeConfig
+	})
+
+	spec, err := newLSPRegistry().Lookup("java")
+	if err != nil {
+		t.Fatalf("Lookup returned error: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Fatalf("java Args = %#v, want no default args", spec.Args)
+	}
+}
