@@ -443,7 +443,7 @@ func executeIndexWarmup(ctx context.Context, cfg *configpkg.Config, workspaceRoo
 		return nil
 	}
 
-	registry := newLSPRegistry()
+	registry := newLSPRegistry(workspaceRoot)
 	language, err := detectIndexWarmupLanguage(workspaceRoot, registry)
 	if err != nil {
 		if errors.Is(err, errNoSupportedRefsLanguage) {

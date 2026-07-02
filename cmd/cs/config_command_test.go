@@ -35,6 +35,7 @@ func TestConfig_DefaultsOnly(t *testing.T) {
 		"lsp.daemon.idle_timeout":    {Value: "10m", Source: "default"},
 		"lsp.go.build_flags":         {Value: "", Source: "default"},
 		"lsp.java.args":              {Value: "", Source: "default"},
+		"lsp.java.lombok":            {Value: "", Source: "default"},
 		"lsp.java.gradle_java_home":  {Value: "", Source: "default"},
 		"lsp.java.runtime_java_home": {Value: "", Source: "default"},
 		"lsp.java.timeout":           {Value: "60s", Source: "default"},

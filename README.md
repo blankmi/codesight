@@ -285,9 +285,13 @@ build_flags = ["-tags=integration"]
 [lsp.java]
 gradle_java_home = "/path/to/jdk"
 timeout = "90s"
-# Extra jdtls launch arguments. Lombok projects need the agent, otherwise
-# generated members are invisible and cross-file method refs return 0 results:
-args = ["--jvm-arg=-javaagent:/path/to/lombok.jar"]
+# Extra jdtls launch arguments:
+args = []
+# Lombok javaagent for jdtls. Without it, Lombok-generated members are
+# invisible and cross-file method refs return 0 results. Default "" detects
+# Lombok in the project build files and injects the newest agent jar found in
+# the local Gradle/Maven caches; "off" disables; a path uses that jar.
+lombok = ""
 ```
 
 Notes:

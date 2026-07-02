@@ -54,6 +54,7 @@ const (
 	keyLSPJavaRuntimeHome    = "lsp.java.runtime_java_home"
 	keyLSPJavaTimeout        = "lsp.java.timeout"
 	keyLSPJavaArgs           = "lsp.java.args"
+	keyLSPJavaLombok         = "lsp.java.lombok"
 	keyLSPGoBuildFlags       = "lsp.go.build_flags"
 	keyLSPDaemonTimeout      = "lsp.daemon.idle_timeout"
 	keyLSPWarmupProbeTimeout = "lsp.daemon.warmup_probe_timeout"
@@ -98,6 +99,10 @@ type JavaLSPConfig struct {
 	RuntimeJavaHome string   `toml:"runtime_java_home"`
 	Timeout         string   `toml:"timeout"`
 	Args            []string `toml:"args"`
+	// Lombok controls the jdtls Lombok javaagent: "" auto-detects the project's
+	// Lombok usage and injects a cached agent jar, "off" disables injection, any
+	// other value is used as an explicit path to a lombok.jar.
+	Lombok string `toml:"lombok"`
 }
 
 type GoLSPConfig struct {
@@ -146,6 +151,7 @@ type layerJavaLSPConfig struct {
 	RuntimeJavaHome *string   `toml:"runtime_java_home"`
 	Timeout         *string   `toml:"timeout"`
 	Args            *[]string `toml:"args"`
+	Lombok          *string   `toml:"lombok"`
 }
 
 type layerGoLSPConfig struct {
@@ -181,6 +187,7 @@ func Defaults() *Config {
 				RuntimeJavaHome: "",
 				Timeout:         defaultJavaTimeout,
 				Args:            []string{},
+				Lombok:          "",
 			},
 			Go: GoLSPConfig{
 				BuildFlags: []string{},
@@ -455,6 +462,10 @@ func mergeLayer(cfg *Config, layer layerConfig, source string) error {
 		cfg.LSP.Java.Args = cloneStrings(*layer.LSP.Java.Args)
 		cfg.Provenance[keyLSPJavaArgs] = source
 	}
+	if layer.LSP.Java.Lombok != nil {
+		cfg.LSP.Java.Lombok = strings.TrimSpace(*layer.LSP.Java.Lombok)
+		cfg.Provenance[keyLSPJavaLombok] = source
+	}
 	if layer.LSP.Go.BuildFlags != nil {
 		cfg.LSP.Go.BuildFlags = cloneStrings(*layer.LSP.Go.BuildFlags)
 		cfg.Provenance[keyLSPGoBuildFlags] = source
@@ -592,6 +603,7 @@ func allConfigKeys() []string {
 		keyLSPJavaRuntimeHome,
 		keyLSPJavaTimeout,
 		keyLSPJavaArgs,
+		keyLSPJavaLombok,
 		keyLSPGoBuildFlags,
 		keyLSPDaemonTimeout,
 		keyLSPWarmupProbeTimeout,

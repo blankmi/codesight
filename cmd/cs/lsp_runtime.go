@@ -35,9 +35,16 @@ var (
 )
 
 // newLSPRegistry builds the language-server registry with user-configured
-// launch arguments applied (e.g. lsp.java.args for a Lombok javaagent).
-func newLSPRegistry() *lsp.Registry {
-	return lsp.NewRegistry(lsp.WithExtraServerArgs("java", currentConfig().LSP.Java.Args...))
+// launch arguments applied (lsp.java.args plus the auto-detected Lombok
+// javaagent). Pass the workspace root when known; an empty root skips
+// project-based detection. Every command that can start the daemon must build
+// identical args for the same workspace, or the daemon restarts on each
+// mismatch — keep all launch sites on this helper.
+func newLSPRegistry(workspaceRoot string) *lsp.Registry {
+	cfg := currentConfig()
+	javaArgs := append([]string(nil), cfg.LSP.Java.Args...)
+	javaArgs = append(javaArgs, javaLombokAgentArgs(workspaceRoot, cfg)...)
+	return lsp.NewRegistry(lsp.WithExtraServerArgs("java", javaArgs...))
 }
 
 type lspCommandRuntime struct {
@@ -51,7 +58,7 @@ type lspCommandRuntime struct {
 
 func newLSPCommandRuntime(registry *lsp.Registry) *lspCommandRuntime {
 	if registry == nil {
-		registry = newLSPRegistry()
+		registry = newLSPRegistry("")
 	}
 
 	return &lspCommandRuntime{
@@ -135,7 +142,7 @@ func (r *lspCommandRuntime) connectClientWithMetadata(
 }
 
 func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, error) {
-	registry := newLSPRegistry()
+	registry := newLSPRegistry(opts.WorkspaceRoot)
 	runtime := newLSPCommandRuntime(registry)
 
 	fallbackBinary := ""
@@ -190,7 +197,7 @@ func executeRefsCommand(ctx context.Context, opts refsCommandOptions) (string, e
 }
 
 func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (string, error) {
-	registry := newLSPRegistry()
+	registry := newLSPRegistry(opts.WorkspaceRoot)
 	runtime := newLSPCommandRuntime(registry)
 
 	// Always use the discovered project root for language detection and daemon connection.
@@ -230,7 +237,7 @@ func executeCallersCommand(ctx context.Context, opts callersCommandOptions) (str
 }
 
 func executeImplementsCommand(ctx context.Context, opts implementsCommandOptions) (string, error) {
-	registry := newLSPRegistry()
+	registry := newLSPRegistry(opts.WorkspaceRoot)
 	runtime := newLSPCommandRuntime(registry)
 
 	// Always use the discovered project root for language detection and daemon connection.
@@ -309,7 +316,7 @@ func appendRefsColdStartHint(output string) string {
 }
 
 func executeLSPWarmup(ctx context.Context, workspaceRoot, language string, cfg *configpkg.Config) error {
-	registry := newLSPRegistry()
+	registry := newLSPRegistry(workspaceRoot)
 	return executeLSPWarmupWithRegistry(ctx, registry, workspaceRoot, language, cfg)
 }
 
@@ -321,7 +328,7 @@ func executeLSPWarmupWithRegistry(
 	cfg *configpkg.Config,
 ) error {
 	if registry == nil {
-		registry = newLSPRegistry()
+		registry = newLSPRegistry(workspaceRoot)
 	}
 
 	spec, err := registry.Lookup(language)

@@ -154,7 +154,7 @@ func runLSPRestart(cmd *cobra.Command, args []string) error {
 func runLSPCleanup(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	l := lsp.NewLifecycle(newLSPRegistry(), lsp.WithIdleTimeout(0)) // timeout not needed for cleanup
+	l := lsp.NewLifecycle(newLSPRegistry(""), lsp.WithIdleTimeout(0)) // timeout not needed for cleanup
 
 	cleaned, err := l.Cleanup(ctx)
 	if err != nil {
@@ -216,7 +216,7 @@ func shortenHome(path string) string {
 }
 
 func executeLSPCommand(ctx context.Context, opts lspCommandOptions) (lspCommandResult, error) {
-	registry := newLSPRegistry()
+	registry := newLSPRegistry(opts.WorkspaceRoot)
 
 	if opts.Status {
 		lifecycle := lsp.NewLifecycle(registry)

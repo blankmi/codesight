@@ -238,7 +238,7 @@ func TestNewLSPRegistryAppliesConfiguredJavaArgs(t *testing.T) {
 		runtimeConfig = previousRuntimeConfig
 	})
 
-	spec, err := newLSPRegistry().Lookup("java")
+	spec, err := newLSPRegistry("").Lookup("java")
 	if err != nil {
 		t.Fatalf("Lookup returned error: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestNewLSPRegistryWithoutJavaArgsKeepsDefaults(t *testing.T) {
 		runtimeConfig = previousRuntimeConfig
 	})
 
-	spec, err := newLSPRegistry().Lookup("java")
+	spec, err := newLSPRegistry("").Lookup("java")
 	if err != nil {
 		t.Fatalf("Lookup returned error: %v", err)
 	}
