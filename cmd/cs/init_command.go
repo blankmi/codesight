@@ -19,10 +19,8 @@ var initCmd = &cobra.Command{
 }
 
 type projectTypeDetection struct {
-	java       bool
-	goLang     bool
-	rust       bool
-	typescript bool
+	java   bool
+	goLang bool
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -95,12 +93,6 @@ func detectProjectTypes(targetPath string) (projectTypeDetection, error) {
 	if detected.goLang, err = anyFilesExist(targetPath, "go.mod"); err != nil {
 		return projectTypeDetection{}, err
 	}
-	if detected.rust, err = anyFilesExist(targetPath, "Cargo.toml"); err != nil {
-		return projectTypeDetection{}, err
-	}
-	if detected.typescript, err = anyFilesExist(targetPath, "package.json"); err != nil {
-		return projectTypeDetection{}, err
-	}
 
 	return detected, nil
 }
@@ -141,7 +133,7 @@ func renderInitConfigTemplate(detected projectTypeDetection) string {
 
 	b.WriteString("[embedding]\n")
 	b.WriteString("# Embedding model used for semantic indexing and search.\n")
-	b.WriteString(fmt.Sprintf("model = %q\n", defaultModel))
+	fmt.Fprintf(&b, "model = %q\n", defaultModel)
 
 	if detected.java {
 		b.WriteString("\n[lsp.java]\n")
@@ -160,14 +152,5 @@ func renderInitConfigTemplate(detected projectTypeDetection) string {
 		b.WriteString("# Additional build flags passed to gopls.\n")
 		b.WriteString("build_flags = []\n")
 	}
-	if detected.rust {
-		b.WriteString("\n[lsp.rust]\n")
-		b.WriteString("# Placeholder for future Rust LSP settings.\n")
-	}
-	if detected.typescript {
-		b.WriteString("\n[lsp.typescript]\n")
-		b.WriteString("# Placeholder for future TypeScript/JavaScript LSP settings.\n")
-	}
-
 	return b.String()
 }

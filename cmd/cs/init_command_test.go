@@ -75,7 +75,7 @@ func TestInit_GoProjectDetected(t *testing.T) {
 	}
 }
 
-func TestInit_RustProjectDetected(t *testing.T) {
+func TestInit_RustProjectNoLSPSection(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	target := t.TempDir()
 	writeTestFile(t, filepath.Join(target, "Cargo.toml"), "[package]\nname = \"example\"\nversion = \"0.1.0\"\n")
@@ -87,8 +87,8 @@ func TestInit_RustProjectDetected(t *testing.T) {
 
 	configPath := filepath.Join(target, ".codesight", "config.toml")
 	configContent := readTestFile(t, configPath)
-	if !strings.Contains(configContent, "[lsp.rust]") {
-		t.Fatalf("config missing [lsp.rust] section:\n%s", configContent)
+	if strings.Contains(configContent, "[lsp.rust]") {
+		t.Fatalf("config should not contain [lsp.rust] section:\n%s", configContent)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestInit_MultipleProjectTypes(t *testing.T) {
 	if !strings.Contains(configContent, "[lsp.go]") {
 		t.Fatalf("config missing [lsp.go] section:\n%s", configContent)
 	}
-	if !strings.Contains(configContent, "[lsp.typescript]") {
-		t.Fatalf("config missing [lsp.typescript] section:\n%s", configContent)
+	if strings.Contains(configContent, "[lsp.typescript]") {
+		t.Fatalf("config should not contain [lsp.typescript] section:\n%s", configContent)
 	}
 }
 
